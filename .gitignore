@@ -1,0 +1,16 @@
+# Environment variables
+.env
+
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+
+# Output directories
+dist/
+build/
+extracted_images_histologia/
+
+# System files
+.DS_Store
+*.log

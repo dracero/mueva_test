@@ -1,0 +1,58 @@
+[project]
+name = "histologia-rag-multimodal"
+version = "0.1.0"
+description = "Sistema RAG multimodal para histopatología con ColPali, ColBERT, MUVERA y Gemini"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+    "pypdf2>=3.0.0",
+    "torch>=2.0.0",
+    "qdrant-client>=1.7.0",
+    "fastembed>=0.2.5",
+    "colpali-engine>=0.1.0",
+    "langchain>=0.1.0",
+    "langchain-google-genai>=1.0.0",
+    "langchain-community>=0.0.20",
+    "ragas>=0.1.0",
+    "datasets>=2.16.0",
+    "plotly>=5.18.0",
+    "pdf2image>=1.16.0",
+    "nest-asyncio>=1.5.8",
+    "langsmith>=0.0.77",
+    "fastapi>=0.115.14",
+    "uvicorn>=0.40.0",
+    "copilotkit>=0.1.78",
+    "python-multipart>=0.0.22",
+    "bitsandbytes>=0.43.0",
+    "accelerate>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ipython>=8.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "ipython>=8.0.0",
+]
+
+# Configure uv to use PyTorch CUDA index for GPU acceleration
+[tool.uv]
+index-url = "https://pypi.org/simple"
+extra-index-url = ["https://download.pytorch.org/whl/cu124"]
+index-strategy = "unsafe-best-match"
+
+# Override torch to use CUDA version
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+

@@ -1,0 +1,19 @@
+{
+  "name": "muvera_test",
+  "version": "1.0.0",
+  "description": "Sistema RAG multimodal para histopatología con ColPali, ColBERT, MUVERA y Gemini.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "backend": "uv run api.py",
+    "frontend": "npm run dev --prefix frontend",
+    "dev": "concurrently \"npm run backend\" \"npm run frontend\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
