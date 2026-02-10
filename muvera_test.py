@@ -595,16 +595,30 @@ class SistemaRAGColPaliPuro:
         print("="*80)
 
         # LLM
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            temperature=0,
-            google_api_key=GOOGLE_API_KEY
-        )
+        if GOOGLE_API_KEY:
+            print("   🤖 Inicializando LLM (Gemini)...")
+            try:
+                self.llm = ChatGoogleGenerativeAI(
+                    model="gemini-2.5-flash",
+                    temperature=0,
+                    google_api_key=GOOGLE_API_KEY
+                )
+            except Exception as e:
+                print(f"   ⚠️ Error inicializando LLM: {e}")
+                self.llm = None
+        else:
+            print("   ⚠️ GOOGLE_API_KEY no encontrada. LLM no disponible.")
+            self.llm = None
 
         # Procesador ColPali PURO
         self.procesador = ProcesadorColPaliPuro()
 
         # Qdrant
+        if QDRANT_URL:
+            print(f"   📦 Inicializando Qdrant en {QDRANT_URL}...")
+        else:
+            print("   ⚠️ QDRANT_URL no encontrada. Usando local o funcionalidad limitada.")
+
         self.gestor_qdrant = GestorQdrantMuvera(
             url=QDRANT_URL or "http://localhost:6333",
             api_key=QDRANT_KEY,
@@ -616,7 +630,11 @@ class SistemaRAGColPaliPuro:
         self.ontologia = self.extractor_ontologia.cargar_ontologia()
 
         # LangGraph
-        self._inicializar_langgraph()
+        if self.llm:
+            self._inicializar_langgraph()
+        else:
+            print("   ⚠️ LangGraph no inicializado (requiere LLM)")
+
         cleanup_memory()
 
     def _inicializar_langgraph(self):
@@ -816,6 +834,9 @@ Genera una respuesta completa integrando toda la información disponible.""")
             await self.gestor_qdrant.insertar_batch_muvera(batch_mv, batch_fde)
 
     async def procesar_consulta(self, consulta: str, imagen_path: Optional[str] = None, user_id: str = "default") -> str:
+        if self.compiled_graph is None:
+            return "Lo siento, el sistema de lenguaje (LLM) no está configurado correctamente. Por favor, verifica la configuración de la API Key de Google."
+
         initial_state = AgentState(
             messages=[], consulta_usuario=consulta, imagen_consulta=imagen_path,
             contexto_memoria="", ontologia=self.ontologia or {}, contexto_ontologico="",
