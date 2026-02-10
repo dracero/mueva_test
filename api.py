@@ -2,7 +2,7 @@
 ============================================================================
 HISTOLOGÍA RAG MULTIMODAL - API Backend
 ============================================================================
-Backend FastAPI para servir el asistente RAG ultimodal a CopilotKit.
+Backend FastAPI para servir el asistente RAG multimodal a CopilotKit.
 """
 
 import os

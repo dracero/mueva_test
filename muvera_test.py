@@ -160,7 +160,7 @@ class ExtractorOntologia:
             self.model = None
             return
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
 
     def extraer_ontologia_completa(self, contenido: str, num_imagenes: int) -> Dict:
         """Extrae ontología completa del documento"""
@@ -192,7 +192,7 @@ Formato JSON estructurado y compacto."""
 
             ontologia["metadata"] = {
                 "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "modelo": "gemini-1.5-flash",
+                "modelo": "gemini-2.5-flash",
                 "num_imagenes": num_imagenes
             }
 
@@ -599,7 +599,7 @@ class SistemaRAGColPaliPuro:
             print("   🤖 Inicializando LLM (Gemini)...")
             try:
                 self.llm = ChatGoogleGenerativeAI(
-                    model="gemini-1.5-flash",
+                    model="gemini-2.5-flash",
                     temperature=0,
                     google_api_key=GOOGLE_API_KEY
                 )
