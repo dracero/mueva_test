@@ -8,7 +8,9 @@ Backend FastAPI para servir el asistente RAG ultimodal a CopilotKit.
 import os
 import uvicorn
 import shutil
+import asyncio
 from pathlib import Path
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from muvera_test import AsistenteHistologiaMultimodal
@@ -16,7 +18,47 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("🚀 Iniciando backend y cargando modelos...")
+    try:
+        # Inicializar componentes en un thread separado si es muy pesado
+        # para no bloquear el loop de eventos, aunque aquí es startup.
+        asistente.inicializar_componentes()
+        print("✅ Modelos cargados.")
+
+        # Auto-indexación al inicio si hay PDFs y no hay colección
+        try:
+            pdf_dir = Path("./pdfs")
+            if not pdf_dir.exists():
+                pdf_dir = Path(".")
+
+            pdfs = list(pdf_dir.glob("*.pdf"))
+            if pdfs:
+                print(f"📦 Se encontraron {len(pdfs)} PDFs. Verificando si es necesario indexar...")
+                try:
+                    client = asistente.qdrant_client
+                    col_name = f"{asistente.collection_name}_texto_mv"
+                    count = await client.count(col_name)
+                    if count.count == 0:
+                        print("⚠️ Colección vacía. Iniciando indexación automática...")
+                        await asistente.procesar_y_almacenar_pdfs_multimodal(pdfs, use_muvera=True)
+                    else:
+                        print(f"✅ Colección {col_name} tiene {count.count} documentos. Saltando indexación.")
+                except Exception as e:
+                    print(f"⚠️ Colección no encontrada o error al contar: {e}")
+                    print("🔄 Intentando indexación automática...")
+                    await asistente.procesar_y_almacenar_pdfs_multimodal(pdfs, use_muvera=True)
+        except Exception as e:
+            print(f"❌ Error en auto-indexación: {e}")
+    except Exception as e:
+        print(f"❌ Error crítico durante la inicialización: {e}")
+        print("⚠️ El servidor iniciará con funcionalidad limitada.")
+
+    yield
+    print("🛑 Cerrando backend...")
+
+app = FastAPI(lifespan=lifespan)
 
 # Configurar CORS para permitir requests del frontend
 app.add_middleware(
@@ -29,42 +71,6 @@ app.add_middleware(
 
 # Inicializar el asistente
 asistente = AsistenteHistologiaMultimodal()
-
-@app.on_event("startup")
-async def startup_event():
-    print("🚀 Iniciando backend y cargando modelos...")
-    asistente.inicializar_componentes()
-    print("✅ Modelos cargados.")
-    
-    # Auto-indexación al inicio si hay PDFs y no hay colección
-    try:
-        pdf_dir = Path("./pdfs")
-        if not pdf_dir.exists():
-            pdf_dir = Path(".")
-            
-        pdfs = list(pdf_dir.glob("*.pdf"))
-        if pdfs:
-            print(f"📦 Se encontraron {len(pdfs)} PDFs. Verificando si es necesario indexar...")
-            # Aquí podríamos verificar si la colección está vacía, pero por simplicidad
-            # lanzamos el proceso. El método store_in_qdrant verifique si existe,
-            # pero procesar_y_almacenar_pdfs_multimodal procesará todo de nuevo.
-            # Idealmente, deberíamos chequear si la colección está vacía.
-            
-            # Chequeo rápido de colección vacía
-            try:
-                client = asistente.qdrant_client
-                col_name = f"{asistente.collection_name}_texto_mv"
-                count = await client.count(col_name)
-                if count.count == 0:
-                    print("⚠️ Colección vacía. Iniciando indexación automática...")
-                    await asistente.procesar_y_almacenar_pdfs_multimodal(pdfs, use_muvera=True)
-                else:
-                    print(f"✅ Colección {col_name} tiene {count.count} documentos. Saltando indexación.")
-            except Exception:
-                print("⚠️ Colección no encontrada o error. Iniciando indexación automática...")
-                await asistente.procesar_y_almacenar_pdfs_multimodal(pdfs, use_muvera=True)
-    except Exception as e:
-        print(f"❌ Error en auto-indexación: {e}")
 
 @app.get("/health")
 def health():
