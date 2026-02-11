@@ -35,12 +35,10 @@ from muvera_test import (
 async def verificar_colecciones(asistente):
     """Verificar y mostrar las colecciones creadas en Qdrant"""
     client = asistente.qdrant_client
-    base = asistente.collection_name 
     
     collections_esperadas = [
-        f"{base}_texto_mv", f"{base}_texto_fde",
-        f"{base}_imagenes_mv", f"{base}_imagenes_fde",
-        f"{base}_multimodal_mv", f"{base}_multimodal_fde",
+        asistente.gestor_qdrant.content_mv_collection,
+        asistente.gestor_qdrant.content_fde_collection
     ]
     
     print("\n" + "="*60)
