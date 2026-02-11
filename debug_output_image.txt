@@ -1,0 +1,88 @@
+/home/cetec/AIProjects/mueva_test/muvera_test.py:78: FutureWarning: 
+
+All support for the `google.generativeai` package has ended. It will no longer be receiving 
+updates or bug fixes. Please switch to the `google.genai` package as soon as possible.
+See README for more details:
+
+https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+
+  import google.generativeai as genai
+🚀 Iniciando Debug de Recuperación con IMAGEN...
+✅ LangSmith configurado
+
+================================================================================
+🚀 SISTEMA RAG HISTOPATOLOGÍA - ColPali PURO + MUVERA + LangGraph
+================================================================================
+
+🖼️ Inicializando ColPali Puro + MUVERA...
+   📚 Cargando ColPali v1.2 (texto + imágenes)...
+Fetching 2 files:   0%|          | 0/2 [00:00<?, ?it/s]Fetching 2 files: 100%|██████████| 2/2 [00:00<00:00, 16743.73it/s]
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.64s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  1.78s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.06s/it]
+Using a slow image processor as `use_fast` is unset and a slow processor was saved with this model. `use_fast=True` will be the default behavior in v4.52, even if the model was saved with a slow processor. This will result in minor differences in outputs. You'll still be able to use a slow processor with `use_fast=False`.
+   ✅ ColPali cargado (128D multi-vector)
+   🚀 Inicializando MUVERA...
+   ✅ MUVERA inicializado (FDE: 20480D)
+🖼️ Usando imagen: uploads/query_image_d2a978a7a73e427db0a93e0f6de4f23e.jpg
+
+
+🔎 CONSULTA MULTIMODAL: 'analiza esta imagen histologica y dime que organo es' + IMAGEN
+
+📨 Recibiendo consulta: analiza esta imagen histologica y dime que organo ...
+
+🔍 Ejecutando búsqueda en Qdrant...
+🔗 Cliente Qdrant conectado
+
+📄 Resultados recuperados (5):
+   [1] Score: 668.5834 | Doc: unknown (Pg ?)
+       Imagen: histopatologia_data/embeddings/arch2_page_3.jpg
+   [2] Score: 665.8362 | Doc: unknown (Pg ?)
+       Imagen: histopatologia_data/embeddings/arch2_page_5.jpg
+   [3] Score: 640.3456 | Doc: unknown (Pg ?)
+       Imagen: histopatologia_data/embeddings/arch2_page_14.jpg
+   [4] Score: 638.4885 | Doc: unknown (Pg ?)
+       Imagen: histopatologia_data/embeddings/arch2_page_15.jpg
+   [5] Score: 633.8242 | Doc: unknown (Pg ?)
+       Imagen: histopatologia_data/embeddings/arch2_page_8.jpg
+
+💭 Generando respuesta multimodal...
+   ✅ Respuesta generada
+
+--------------------------------------------------
+🤖 RESPUESTA FINAL DEL AGENTE:
+¡Excelente consulta! Como su profesor de histopatología, vamos a analizar esta imagen con el rigor y la precisión que requiere.
+
+Basándome en la imagen histológica proporcionada, el órgano que estamos observando es la **Tráquea** o un **Bronquio principal (de gran calibre)**.
+
+### Análisis Histológico Detallado y Justificación
+
+Para un estudiante de medicina, es crucial identificar las características clave que nos llevan a este diagnóstico. Observemos la imagen con atención:
+
+1.  **Epitelio (Capa más superficial):**
+    *   **Tipo:** Lo primero que salta a la vista es el epitelio que recubre la luz del órgano. Se trata de un **epitelio pseudoestratificado cilíndrico ciliado con células caliciformes**.
+        *   **Pseudoestratificado:** Aunque los núcleos de las células se encuentran a diferentes niveles, dando la impresión de varias capas, todas las células contactan con la membrana basal. Esto es una característica distintiva de las vías respiratorias.
+        *   **Cilíndrico:** La forma predominante de las células es columnar o cilíndrica.
+        *   **Ciliado:** En la superficie apical de las células cilíndricas, se observan claramente los **cilios**, pequeñas proyecciones móviles que son esenciales para el movimiento del moco y las partículas atrapadas hacia la faringe (el "escalador mucociliar").
+        *   **Células Caliciformes:** Dispersas entre las células ciliadas, se aprecian células pálidas, con forma de cáliz o copa, que son las **células caliciformes**. Estas células son glándulas unicelulares especializadas en la producción y secreción de moco.
+    *   **Función:** Este epitelio es la primera línea de defensa del sistema respiratorio, atrapando partículas y patógenos en el moco y expulsándolos gracias a la acción coordinada de los cilios.
+
+2.  **Lámina Propia y Submucosa (Debajo del Epitelio):**
+    *   Inmediatamente debajo del epitelio, encontramos una capa de tejido conectivo laxo, rica en vasos sanguíneos y células inmunes, que constituye la lámina propia.
+    *   Lo más distintivo en esta región son las **glándulas seromucosas (o glándulas traqueales/bronquiales)**. Se observan múltiples acinos glandulares, algunos con secreción más pálida (mucosa) y otros con secreción más basófila (serosa). Estas glándulas son tubuloacinares compuestas y contribuyen significativamente a la producción del moco que recubre el epitelio, manteniéndolo húmedo y facilitando la captura de partículas.
+
+3.  **Ausencia de Cartílago en esta Vista:**
+    *   Es importante señalar que, en esta vista particular de la imagen, no se observa el cartílago hialino que es característico de la tráquea (anillos en forma de "C") o de los bronquios principales (placas irregulares). Sin embargo, la combinación del epitelio respiratorio pseudoestratificado ciliado con células caliciformes y la presencia abundante de glándulas seromucosas en la submucosa es **patognomónica** de las vías aéreas conductoras de gran calibre.
+
+### Conclusión y Diferenciación
+
+La presencia de **epitelio pseudoestratificado cilíndrico ciliado con células caliciformes** y **glándulas seromucosas en la submucosa** son las características diagnósticas clave que nos permiten identificar este órgano como parte del sistema respiratorio conductor, específicamente la **tráquea** o un **bronquio principal**.
+
+*   **Tráquea vs. Bronquio Principal:** La distinción entre tráquea y un bronquio principal a menudo se basa en la morfología del cartílago (anillos en "C" en la tráquea vs. placas irregulares en los bronquios) y la presencia de una capa de músculo liso más prominente en los bronquios. Dado que el cartílago no es visible en esta imagen, no podemos hacer una distinción absoluta, pero ambas opciones son correctas basándonos en las características presentes.
+
+### Integración con Información Adicional
+
+He revisado los "DOCUMENTOS Y CONTEXTOS RECUPERADOS" que se proporcionaron (imágenes y textos relacionados con el aparato genital, como el cuerpo lúteo o el endometrio). Es importante destacar que esta información **no es relevante** para el análisis de la imagen histológica de la tráquea/bronquio. Mi análisis se basa exclusivamente en las características morfológicas observadas en la imagen de consulta.
+
+Espero que este análisis detallado le sea de gran utilidad para comprender la histología de las vías respiratorias. ¡Siga practicando la identificación de estas estructuras clave!
+--------------------------------------------------
+Exception ignored in: <_io.BufferedWriter name=28>
+BrokenPipeError: [Errno 32] Broken pipe

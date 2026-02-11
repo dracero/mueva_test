@@ -1,3 +1,4 @@
+
 # ============================================================================
 # RAG HISTOPATOLOGÍA - LANGGRAPH + ColPali PURO + MUVERA
 # Sistema simplificado usando SOLO ColPali para texto E imágenes
@@ -736,60 +737,85 @@ class SistemaRAGColPaliPuro:
             query_mv = self.procesador.generar_embedding_texto(state['consulta_optimizada'])
 
         if query_mv is not None:
+            print(f"\n🔍 Ejecutando búsqueda en Qdrant...")
             query_fde = self.procesador.generar_fde_muvera(query_mv)
             resultados = await self.gestor_qdrant.buscar_muvera_2stage(query_mv, query_fde)
+            
+            print(f"\n📄 Resultados recuperados ({len(resultados)}):")
+            for i, res in enumerate(resultados):
+                payload = res.get('payload', {})
+                score = res.get('score', 0.0)
+                doc_name = payload.get('nombre_archivo', 'unknown')
+                page_num = payload.get('numero_pagina', '?')
+                print(f"   [{i+1}] Score: {score:.4f} | Doc: {doc_name} (Pg {page_num})")
+                if payload.get('tipo') == 'texto':
+                     print(f"       Texto: {payload.get('texto', '')[:100]}...")
+                elif payload.get('tipo') == 'imagen':
+                     print(f"       Imagen: {payload.get('imagen_path', 'N/A')}")
 
         state["resultados_busqueda"] = resultados
         contextos = []
         imagenes = []
-        for r in resultados:
+        for i, r in enumerate(resultados):
+            score = r.get('score', 0.0)
             tipo = r['payload'].get('tipo', 'unknown')
+            pdf_name = r['payload'].get('pdf_name', 'desconocido')
             if tipo == 'texto':
-                contextos.append(f"[TEXTO]\n{r['payload'].get('texto', '')[:400]}")
+                texto = r['payload'].get('texto', '')
+                contextos.append(f"[RESULTADO {i+1} - TEXTO - Score: {score:.2f} - Fuente: {pdf_name}]\n{texto[:800]}")
             elif tipo == 'imagen':
                 img_path = r['payload'].get('imagen_path')
+                contexto_texto = r['payload'].get('contexto_texto', '')
                 if img_path:
                     imagenes.append(img_path)
-                    contextos.append(f"[IMAGEN]\nImagen: {os.path.basename(img_path)}\nContexto: {r['payload'].get('contexto_texto', '')[:200]}")
+                    contextos.append(f"[RESULTADO {i+1} - IMAGEN - Score: {score:.2f} - Fuente: {pdf_name}]\nArchivo: {os.path.basename(img_path)}\nTexto asociado a esta imagen: {contexto_texto[:600]}")
 
-        state["contexto_documentos"] = "\n\n".join(contextos)
+        state["contexto_documentos"] = "\n\n---\n\n".join(contextos)
         state["imagenes_relevantes"] = imagenes
         state["trayectoria"].append({"nodo": "buscar", "timestamp": time.time()})
         return state
 
     async def _nodo_generar_respuesta(self, state: AgentState) -> AgentState:
-        """Nodo 6: Generar respuesta multimodal"""
-        print("\n💭 Generando respuesta multimodal...")
+        """Nodo 6: Generar respuesta basada EXCLUSIVAMENTE en contexto recuperado"""
+        print("\n💭 Generando respuesta basada en contexto recuperado...")
 
-        contexto_imagen = ""
+        # Construir información sobre imágenes
+        info_imagen = ""
         if state.get('imagen_consulta'):
-            contexto_imagen = f"\n\nIMAGEN DE CONSULTA: {state['imagen_consulta']}\nEl usuario proporcionó una imagen. Analízala en contexto."
-
+            info_imagen = "\nNOTA: El usuario proporcionó una imagen para análisis."
         if state["imagenes_relevantes"]:
-            contexto_imagen += f"\n\nIMÁGENES RELEVANTES: {len(state['imagenes_relevantes'])} encontradas"
+            info_imagen += f"\nSe encontraron {len(state['imagenes_relevantes'])} imágenes similares en la base de datos."
 
         messages = [
-            SystemMessage(content="""Eres un profesor experto en histopatología con capacidad multimodal.
+            SystemMessage(content="""Eres un profesor experto en histopatología. Tu función es responder EXCLUSIVAMENTE usando la información recuperada de la base de datos.
 
-INSTRUCCIONES:
-- Proporciona respuestas detalladas y didácticas
-- Integra información textual e visual
-- Usa terminología histológica precisa
-- Referencias imágenes cuando sean relevantes
-- Explica conceptos para estudiantes de medicina"""),
-            HumanMessage(content=f"""CONSULTA: {state["consulta_usuario"]}
-{contexto_imagen}
+REGLAS ABSOLUTAS (NO NEGOCIABLES):
+1. SOLO puedes responder usando la información del CONTEXTO RECUPERADO que se te proporciona abajo.
+2. NUNCA uses tu propio conocimiento para identificar órganos, tejidos o estructuras. Tu conocimiento general SOLO sirve para explicar y enriquecer lo que dice el contexto recuperado.
+3. Si el contexto recuperado dice que es "ovario", tu respuesta DEBE decir que es ovario. Si dice "hígado", dices hígado. NUNCA contradigas el contexto.
+4. Cita explícitamente las fuentes: "Según el documento recuperado [nombre]..."
+5. Si el contexto recuperado no contiene información suficiente, di: "La base de datos no contiene información suficiente para responder esta consulta."
+6. ESTÁ PROHIBIDO decir frases como "esta información no es relevante" o "descarto el contexto" o "basándome en mi análisis propio".
 
-CLASIFICACIÓN: {state["clasificacion"]}
+ESTRUCTURA DE RESPUESTA:
+1. **Identificación**: Qué órgano/tejido/estructura identifica el contexto recuperado.
+2. **Evidencia del contexto**: Citar textualmente las partes relevantes del contexto recuperado.
+3. **Explicación didáctica**: Usar tu conocimiento para AMPLIAR (nunca contradecir) lo que dice el contexto."""),
+            HumanMessage(content=f"""CONSULTA DEL USUARIO: {state["consulta_usuario"]}
+{info_imagen}
 
-CONTEXTO ONTOLÓGICO:
-{state["contexto_ontologico"]}
+========================================
+CONTEXTO RECUPERADO DE LA BASE DE DATOS
+(Esta es la ÚNICA fuente de verdad para tu respuesta)
+========================================
 
-DOCUMENTOS Y CONTEXTOS RECUPERADOS:
-{state["contexto_documentos"][:6000]}...
+{state["contexto_documentos"][:10000]}
 
-Genera una respuesta completa integrando toda la información disponible.""")
+========================================
+
+Responde basándote ÚNICAMENTE en el contexto de arriba. Cita las fuentes.""")
         ]
+
 
         response = await self.llm.ainvoke(messages)
         state["respuesta_final"] = response.content

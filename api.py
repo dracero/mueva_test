@@ -33,6 +33,15 @@ asistente = AsistenteHistologiaMultimodal()
 @app.on_event("startup")
 async def startup_event():
     print("🚀 Iniciando backend y cargando modelos...")
+    
+    # Limpiar directorio de uploads al inicio para evitar "memoria" de imágenes anteriores
+    uploads_dir = Path("uploads")
+    if uploads_dir.exists():
+        print(f"🧹 Limpiando directorio {uploads_dir}...")
+        for file in uploads_dir.glob("*"):
+            if file.is_file():
+                file.unlink()
+    
     asistente.inicializar_componentes()
     print("✅ Modelos cargados.")
     

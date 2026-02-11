@@ -134,12 +134,6 @@ export function Chat() {
                             <li>Haz preguntas sobre tus documentos PDF</li>
                             <li>Añade PDFs a <code>./pdfs</code> y re-indexa</li>
                         </ul>
-                        <h2 style={styles.cardTitle}>💡 Instrucciones</h2>
-                        <ul style={styles.instructionList}>
-                            <li>Sube una imagen histológica para análisis</li>
-                            <li>Haz preguntas sobre tus documentos PDF</li>
-                            <li>Añade PDFs a <code>./pdfs</code> y re-indexa</li>
-                        </ul>
 
                         {imagePreview && (
                             <div style={{ marginTop: '20px', textAlign: 'center' }}>
