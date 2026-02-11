@@ -53,7 +53,7 @@ async def startup_event():
             # Chequeo rápido de colección vacía
             try:
                 client = asistente.qdrant_client
-                col_name = f"{asistente.collection_name}_texto_mv"
+                col_name = asistente.gestor_qdrant.content_mv_collection
                 count = await client.count(col_name)
                 if count.count == 0:
                     print("⚠️ Colección vacía. Iniciando indexación automática...")

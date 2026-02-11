@@ -25,6 +25,7 @@ import json
 import time
 import asyncio
 import base64
+import uuid
 import nest_asyncio
 from typing import TypedDict, Annotated, List, Dict, Any, Optional
 from pathlib import Path
@@ -802,7 +803,10 @@ Genera una respuesta completa integrando toda la información disponible.""")
 
             if mv_embedding is None: continue
             fde_embedding = self.procesador.generar_fde_muvera(mv_embedding)
-            point_id = f"{Path(pdf_name).stem}_{tipo}_{i}"
+
+            # Generar un ID UUID determinístico basado en el contenido para evitar duplicados y errores 400
+            seed_id = f"{Path(pdf_name).stem}_{tipo}_{i}"
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, seed_id))
 
             batch_mv.append(PointStruct(id=point_id, vector=mv_embedding.tolist(), payload=payload))
             batch_fde.append(PointStruct(id=point_id, vector=fde_embedding.tolist(), payload=payload))
@@ -895,6 +899,22 @@ class AsistenteHistologiaMultimodal(SistemaRAGColPaliPuro):
 # ============================================================================
 
 _sistema_global = None
+
+async def limpiar_colecciones(asistente):
+    """Elimina las colecciones de Qdrant"""
+    client = asistente.qdrant_client
+    collections = [
+        asistente.gestor_qdrant.content_mv_collection,
+        asistente.gestor_qdrant.content_fde_collection
+    ]
+
+    print(f"\n🗑️ Limpiando {len(collections)} colecciones...")
+    for col in collections:
+        try:
+            await client.delete_collection(col)
+            print(f"   ✅ Eliminada: {col}")
+        except Exception as e:
+            print(f"   ⚠️ No se pudo eliminar {col}: {e}")
 
 async def inicializar_sistema():
     global _sistema_global
