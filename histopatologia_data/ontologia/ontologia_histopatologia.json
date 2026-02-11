@@ -1,0 +1,241 @@
+{
+  "SISTEMAS_ANATOMICOS": [
+    "APARATO GENITAL",
+    "Ovario",
+    "Parte superficial del ovario",
+    "Corteza del ovario",
+    "Superficie ovárica",
+    "Trompa uterina (Trompa de Fallopio)",
+    "Ampolla (de la trompa uterina)",
+    "Istmo (de la trompa uterina)",
+    "Mesosalpinx",
+    "Útero",
+    "Pared del útero",
+    "Cavidad uterina",
+    "Endometrio",
+    "Miometrio",
+    "Perimetrio",
+    "Cuello uterino (Cérvix)",
+    "Endocérvix (parte interna del cuello uterino)",
+    "Canal cervical",
+    "Pared del cérvix",
+    "Vagina",
+    "Pared de la vagina",
+    "Testículo",
+    "Parénquima testicular",
+    "Rete testis",
+    "Epidídimo",
+    "Conducto deferente (porción intraepididimaria)",
+    "Cápsula",
+    "Pared (general)",
+    "Luz (general)"
+  ],
+  "TERMINOLOGIA_HISTOLOGICA": [
+    "Tecafolicular",
+    "Células de la granulosa",
+    "Citoplasma del oocito",
+    "Núcleo del oocito",
+    "Folículo (general)",
+    "Folículo primario",
+    "Folículos primordiales",
+    "Epitelio germinativo (mesotelio)",
+    "Túnica albugínea",
+    "Estroma ovárico (tejido conjuntivo)",
+    "Oocito",
+    "Células foliculares (aplanadas)",
+    "Membrana basal",
+    "Zona pelúcida",
+    "Antro folicular",
+    "Cúmulo oóforo",
+    "Antro",
+    "Teca interna",
+    "Teca externa",
+    "Células intersticiales ováricas",
+    "Cuerpo lúteo",
+    "Septos de tejido conjuntivo",
+    "Nódulos de tejido conjuntivo",
+    "Células luteínicas de la granulosa",
+    "Células luteínicas tecales",
+    "Cordones de tejido conjuntivo",
+    "Epitelio (general)",
+    "Mucosa",
+    "Lámina propia",
+    "Capa muscular",
+    "Capa muscular circular interna",
+    "Capa muscular longitudinal externa",
+    "Tejido conjuntivo submesotelial",
+    "Serosa (peritoneo)",
+    "Mesotelio",
+    "Vasos sanguíneos",
+    "Luz ampular",
+    "Repliegues de la mucosa",
+    "Células secretoras",
+    "Células ciliadas",
+    "Epitelio cilíndrico pseudoestratificado",
+    "Epitelio superficial",
+    "Glándulas endometriales",
+    "Estroma",
+    "Epitelio cilíndrico simple",
+    "Arterias espirales",
+    "Glándulas endometriales de curso contorneado",
+    "Estroma endometrial",
+    "Glándulas endometriales de aspecto aserrado",
+    "Luz glandular",
+    "Secreción (glandular)",
+    "Pliegues de la mucosa (Plicae palmatae)",
+    "Epitelio secretor de moco",
+    "Repliegues profundos de la mucosa",
+    "Células musculares lisas",
+    "Tejido conjuntivo",
+    "Epitelio plano estratificado no queratinizado",
+    "Fibras musculares lisas (dispuestas longitudinalmente)",
+    "Músculo esquelético (músculo bulboesponjoso)",
+    "Células acidófilas",
+    "Grupos de células naviculares",
+    "Túbulos seminíferos (de aspecto contorneado)",
+    "Tejido intersticial",
+    "Células de Leydig",
+    "Epitelio seminífero",
+    "Células mioides"
+  ],
+  "TECNICAS_Y_TINCIONES": [
+    "H&E (Hematoxilina y Eosina)",
+    "x400",
+    "x680",
+    "x275",
+    "x150",
+    "x135",
+    "Azán",
+    "x13",
+    "x65",
+    "x14",
+    "x19",
+    "x440",
+    "x5",
+    "x35",
+    "x120",
+    "x45",
+    "x110",
+    "x20",
+    "Papanicolau",
+    "Sección histológica",
+    "Sección transversal",
+    "Frottis vaginal",
+    "Vista a mayor aumento"
+  ],
+  "FIGURAS": [
+    {
+      "numero": "16.2",
+      "descripcion": "Parte superficial del ovario mostrando diferentes grados de desarrollo de los folículos y su localización."
+    },
+    {
+      "numero": "16.3",
+      "descripcion": "Folículo primordial en la corteza del ovario. El oocito aparece rodeado por una única capa de células foliculares aplanadas."
+    },
+    {
+      "numero": "16.4",
+      "descripcion": "Folículo primario en la corteza del ovario. Hay varias capas de células foliculares formando la granulosa."
+    },
+    {
+      "numero": "16.5",
+      "descripcion": "Folículo secundario del ovario. Se ha desarrollado el antro folicular entre las células de la granulosa."
+    },
+    {
+      "numero": "16.6",
+      "descripcion": "Sección de la pared de un folículo secundario."
+    },
+    {
+      "numero": "16.7",
+      "descripcion": "Parte del ovario mostrando un folículo atrésico y células intersticiales en el estroma ovárico."
+    },
+    {
+      "numero": "16.8",
+      "descripcion": "Cuerpo lúteo del ovario localizado inmediatamente debajo de la superficie ovárica."
+    },
+    {
+      "numero": "16.9",
+      "descripcion": "Detalle de la periferia de un cuerpo lúteo mostrando los dos tipos de células luteínicas."
+    },
+    {
+      "numero": "16.10",
+      "descripcion": "Parte de un cuerpo albicans."
+    },
+    {
+      "numero": "16.11",
+      "descripcion": "Sección transversal de la trompa uterina o trompa de Fallopio a nivel de la ampolla."
+    },
+    {
+      "numero": "16.12",
+      "descripcion": "Sección transversal de la trompa uterina a nivel del istmo."
+    },
+    {
+      "numero": "16.13",
+      "descripcion": "Vista a mayor aumento de la mucosa de la trompa de Fallopio. El epitelio es cilíndrico pseudoestratificado con células secretoras."
+    },
+    {
+      "numero": "16.14",
+      "descripcion": "Pared del útero mostrando la neta distinción entre sus tres capas: endometrio, miometrio y perimetrio."
+    },
+    {
+      "numero": "16.15",
+      "descripcion": "Mucosa endometrial del útero mostrando glándulas endometriales de curso contorneado (fase proliferativa)."
+    },
+    {
+      "numero": "16.16",
+      "descripcion": "Detalle del endometrio mostrando el epitelio de revestimiento superficial y el de las glándulas que, en ambos casos, es cilíndrico simple con algunas células ciliadas."
+    },
+    {
+      "numero": "16.17",
+      "descripcion": "Arterias espirales en el endometrio."
+    },
+    {
+      "numero": "16.18",
+      "descripcion": "Endometrio en la fase proliferativa del ciclo menstrual mostrando glándulas contorneadas."
+    },
+    {
+      "numero": "16.19",
+      "descripcion": "Endometrio en la fase secretora del ciclo menstrual mostrando una mayor espiralización de las glándulas que presentan un aspecto aserrado. La luz glandular, que aparece dilatada, contiene abundante secreción."
+    },
+    {
+      "numero": "16.20",
+      "descripcion": "Mucosa del endocérvix (parte interna del cuello uterino) mostrando pliegues desarrollados (plicae palmatae) aparentando glándulas. El epitelio es secretor de moco como el del estómago."
+    },
+    {
+      "numero": "16.21",
+      "descripcion": "Sección de la pared del cérvix a nivel del canal cervical."
+    },
+    {
+      "numero": "16.22",
+      "descripcion": "Sección transversal de la pared de la vagina mostrando sus capas."
+    },
+    {
+      "numero": "16.23",
+      "descripcion": "Frottis vaginal hecho durante la fase folicular tardía del ciclo menstrual."
+    },
+    {
+      "numero": "16.24",
+      "descripcion": "Frotis vaginal hecho durante la fase luteínica del ciclo menstrual."
+    },
+    {
+      "numero": "16.25",
+      "descripcion": "Sección histológica que comprende parte del testículo, de la rete testis, del epidídimo y de la porción inicial del conducto deferente (porción intraepididimaria)."
+    },
+    {
+      "numero": "16.26",
+      "descripcion": "Parénquima testicular mostrando los tubos seminíferos y el intersticio testicular. Este último contiene células de Leydig."
+    }
+  ],
+  "PATOLOGIAS": [
+    "Folículo atrésico",
+    "Cuerpo albicans",
+    "Fase proliferativa (del ciclo menstrual)",
+    "Fase secretora (del ciclo menstrual)",
+    "Fase folicular tardía (del ciclo menstrual)",
+    "Fase luteínica (del ciclo menstrual)"
+  ],
+  "metadata": {
+    "fecha": "2026-02-11 16:06:19",
+    "modelo": "gemini-2.5-flash",
+    "num_imagenes": 15
+  }
+}

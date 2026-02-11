@@ -103,7 +103,7 @@ class Config:
 
     # Dimensiones de embeddings (SOLO ColPali)
     COLPALI_EMBEDDING_DIM = 128  # ColPali dimensión por vector
-    FDE_DIM = 1024               # MUVERA FDE dimension
+    FDE_DIM = 20480              # MUVERA FDE dimension (64 clusters * 16 dim_proj * 20 reps)
 
     # Parámetros de procesamiento
     TEXT_CHUNK_SIZE = 1000
@@ -251,9 +251,15 @@ class ProcesadorColPaliPuro:
         # SOLO ColPali - para texto E imágenes
         print("   📚 Cargando ColPali v1.2 (texto + imágenes)...")
         try:
+            from transformers import BitsAndBytesConfig
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.bfloat16,
+                bnb_4bit_quant_type="nf4"
+            )
             self.colpali_model = ColPaliModel.from_pretrained(
                 "vidore/colpali-v1.2",
-                torch_dtype=torch.bfloat16,
+                quantization_config=quantization_config,
                 device_map=self.device
             )
             self.colpali_processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.2")
@@ -559,6 +565,7 @@ class AgentState(TypedDict):
     imagenes_relevantes: List[str]
     respuesta_final: str
     trayectoria: Annotated[List[Dict[str, Any]], operator.add]
+    imagen_base64: Optional[str]
     user_id: str
     tiempo_inicio: float
 
@@ -602,6 +609,10 @@ class SistemaRAGColPaliPuro:
             google_api_key=GOOGLE_API_KEY
         )
 
+        # Configurar directorio de uploads para imágenes temporales
+        self.uploads_dir = Path("uploads")
+        self.uploads_dir.mkdir(parents=True, exist_ok=True)
+
         # Procesador ColPali PURO
         self.procesador = ProcesadorColPaliPuro()
 
@@ -624,6 +635,7 @@ class SistemaRAGColPaliPuro:
         """Inicializar grafo de agentes"""
         graph = StateGraph(AgentState)
 
+        graph.add_node("recepcionar_consulta", self._nodo_recepcionar_consulta)
         graph.add_node("inicializar", self._nodo_inicializar)
         graph.add_node("analizar_ontologia", self._nodo_analizar_ontologia)
         graph.add_node("clasificar", self._nodo_clasificar)
@@ -632,7 +644,8 @@ class SistemaRAGColPaliPuro:
         graph.add_node("generar_respuesta", self._nodo_generar_respuesta)
         graph.add_node("finalizar", self._nodo_finalizar)
 
-        graph.add_edge(START, "inicializar")
+        graph.add_edge(START, "recepcionar_consulta")
+        graph.add_edge("recepcionar_consulta", "inicializar")
         graph.add_edge("inicializar", "analizar_ontologia")
         graph.add_edge("analizar_ontologia", "clasificar")
         graph.add_edge("clasificar", "optimizar_consulta")
@@ -645,10 +658,41 @@ class SistemaRAGColPaliPuro:
 
     # ========== NODOS DEL GRAFO ==========
 
+    async def _nodo_recepcionar_consulta(self, state: AgentState) -> AgentState:
+        """Nodo 0: Recepcionar consulta y procesar imagen Base64 si existe"""
+        print(f"\n📨 Recibiendo consulta: {state['consulta_usuario'][:50]}...")
+        
+        state["trayectoria"] = [{"nodo": "recepcionar_consulta", "timestamp": time.time()}]
+        
+        # Procesar imagen Base64 si existe
+        if state.get("imagen_base64"):
+            try:
+                print("🖼️ Procesando imagen Base64...")
+                # Decodificar base64
+                image_data = base64.b64decode(state["imagen_base64"])
+                
+                # Generar nombre único
+                filename = f"query_image_{uuid.uuid4().hex}.jpg"
+                filepath = self.uploads_dir / filename
+                
+                # Guardar imagen
+                with open(filepath, "wb") as f:
+                    f.write(image_data)
+                
+                state["imagen_consulta"] = str(filepath)
+                print(f"✅ Imagen guardada en: {filepath}")
+                
+            except Exception as e:
+                print(f"❌ Error decodificando imagen Base64: {e}")
+                # No fallamos, solo continuamos sin imagen
+                state["imagen_consulta"] = None
+        
+        return state
+
     async def _nodo_inicializar(self, state: AgentState) -> AgentState:
         state["ontologia"] = self.ontologia or {}
         state["tiempo_inicio"] = time.time()
-        state["trayectoria"] = [{"nodo": "inicializar", "timestamp": time.time()}]
+        state["trayectoria"].append({"nodo": "inicializar", "timestamp": time.time()})
         return state
 
     async def _nodo_analizar_ontologia(self, state: AgentState) -> AgentState:
@@ -819,9 +863,10 @@ Genera una respuesta completa integrando toda la información disponible.""")
         if batch_mv:
             await self.gestor_qdrant.insertar_batch_muvera(batch_mv, batch_fde)
 
-    async def procesar_consulta(self, consulta: str, imagen_path: Optional[str] = None, user_id: str = "default") -> str:
+    async def procesar_consulta(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> str:
         initial_state = AgentState(
             messages=[], consulta_usuario=consulta, imagen_consulta=imagen_path,
+            imagen_base64=imagen_base64,
             contexto_memoria="", ontologia=self.ontologia or {}, contexto_ontologico="",
             clasificacion="", consulta_optimizada="", filtros_ontologia=[],
             resultados_busqueda=[], contexto_documentos="", imagenes_relevantes=[],
@@ -869,9 +914,9 @@ class AsistenteHistologiaMultimodal(SistemaRAGColPaliPuro):
         """Alias para procesar_pdfs"""
         await self.procesar_pdfs([str(f) for f in pdf_files])
 
-    async def iniciar_flujo_multimodal(self, consulta_usuario=None, imagen_path=None, ground_truth=None):
+    async def iniciar_flujo_multimodal(self, consulta_usuario=None, imagen_path=None, imagen_base64=None, ground_truth=None):
         """Alias para procesar_consulta con formato de retorno anterior"""
-        respuesta = await self.procesar_consulta(consulta_usuario or "Analizar contenido", imagen_path)
+        respuesta = await self.procesar_consulta(consulta_usuario or "Analizar contenido", imagen_path, imagen_base64)
         return {
             "respuesta": respuesta,
             "analisis_imagen": "Ver respuesta",

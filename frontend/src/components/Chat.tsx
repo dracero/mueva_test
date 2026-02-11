@@ -10,6 +10,8 @@ export function Chat() {
     const [input, setInput] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState<string>("");
+    const [imageBase64, setImageBase64] = useState<string | null>(null);
+    const [imagePreview, setImagePreview] = useState<string | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleSend = async () => {
@@ -29,6 +31,7 @@ export function Chat() {
                         role: m.role,
                         content: m.content,
                     })),
+                    image_base64: imageBase64 ? imageBase64.split(",")[1] : null, // Send only the base64 data, not the header
                 }),
             });
             const data = await response.json();
@@ -44,6 +47,8 @@ export function Chat() {
             ]);
         } finally {
             setIsLoading(false);
+            setImageBase64(null);
+            setImagePreview(null);
         }
     };
 
@@ -54,28 +59,18 @@ export function Chat() {
         }
     };
 
-    const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
         const file = event.target.files?.[0];
         if (!file) return;
 
-        setUploadStatus("📤 Subiendo...");
-        const formData = new FormData();
-        formData.append("file", file);
-
-        try {
-            const response = await fetch("http://127.0.0.1:8000/upload-image", {
-                method: "POST",
-                body: formData,
-            });
-            const data = await response.json();
-            if (data.status === "success") {
-                setUploadStatus(`✅ Subido: ${data.filename}`);
-            } else {
-                setUploadStatus(`❌ Error: ${data.message}`);
-            }
-        } catch (error) {
-            setUploadStatus(`❌ Error: ${error}`);
-        }
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const base64String = reader.result as string;
+            setImageBase64(base64String);
+            setImagePreview(base64String);
+            setUploadStatus(`✅ Imagen seleccionada: ${file.name}`);
+        };
+        reader.readAsDataURL(file);
     };
 
     const handleReindex = async () => {
@@ -112,7 +107,7 @@ export function Chat() {
                                 onClick={() => fileInputRef.current?.click()}
                                 style={styles.uploadButton}
                             >
-                                🖼️ Subir Imagen
+                                🖼️ Seleccionar Imagen
                             </button>
                             <input
                                 ref={fileInputRef}
@@ -139,6 +134,19 @@ export function Chat() {
                             <li>Haz preguntas sobre tus documentos PDF</li>
                             <li>Añade PDFs a <code>./pdfs</code> y re-indexa</li>
                         </ul>
+                        <h2 style={styles.cardTitle}>💡 Instrucciones</h2>
+                        <ul style={styles.instructionList}>
+                            <li>Sube una imagen histológica para análisis</li>
+                            <li>Haz preguntas sobre tus documentos PDF</li>
+                            <li>Añade PDFs a <code>./pdfs</code> y re-indexa</li>
+                        </ul>
+
+                        {imagePreview && (
+                            <div style={{ marginTop: '20px', textAlign: 'center' }}>
+                                <p style={{ fontSize: '12px', marginBottom: '5px' }}>Vista previa:</p>
+                                <img src={imagePreview} alt="Preview" style={{ maxWidth: '100%', borderRadius: '8px', maxHeight: '150px' }} />
+                            </div>
+                        )}
                     </div>
                 </aside>
 

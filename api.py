@@ -72,18 +72,21 @@ def health():
     return {"status": "ok"}
 
 # Wrapper para el agente
-async def chat_handler(query: str, image_path: str = None):
+async def chat_handler(query: str, image_path: str = None, image_base64: str = None):
     """
     Manejador simple para conectar CopilotKit con el asistente.
     """
     print(f"📨 Consulta recibida: {query}")
     if image_path:
         print(f"🖼️ Imagen adjunta: {image_path}")
+    if image_base64:
+        print(f"🖼️ Imagen adjunta (Base64)")
     
     # Usar el flujo multimodal existente con imagen si está disponible
     resultado = await asistente.iniciar_flujo_multimodal(
         consulta_usuario=query,
-        imagen_path=image_path
+        imagen_path=image_path,
+        imagen_base64=image_base64
     )
     
     if resultado and resultado.get("respuesta"):
@@ -116,6 +119,7 @@ import glob
 class ChatRequest(BaseModel):
     messages: list
     image_path: Optional[str] = None  # Ruta de imagen opcional
+    image_base64: Optional[str] = None # Imagen en base64
 
 def get_latest_uploaded_image() -> Optional[str]:
     """Obtiene la imagen más reciente subida al servidor."""
@@ -141,13 +145,17 @@ async def chat_endpoint(request: ChatRequest):
     
     # Buscar imagen: primero del request, luego la más reciente subida
     image_path = request.image_path
-    if not image_path:
+    image_base64 = request.image_base64
+    
+    if not image_path and not image_base64:
         image_path = get_latest_uploaded_image()
     
     if image_path and os.path.exists(image_path):
         print(f"🖼️ Usando imagen para contexto: {image_path}")
+    elif image_base64:
+        print(f"🖼️ Usando imagen Base64 para contexto")
     
-    response_text = await chat_handler(last_message, image_path)
+    response_text = await chat_handler(last_message, image_path, image_base64)
     return {"response": response_text}
 
 # Intento de uso estándar de CopilotKit si es posible envolver
