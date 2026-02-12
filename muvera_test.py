@@ -357,13 +357,34 @@ class ProcesadorColPaliPuro:
             multivector = image_embeddings[0].cpu().float().numpy()
 
             del image, batch_images, image_embeddings
-            cleanup_memory()
+            # cleanup_memory() - Removed per Bolt's optimization: moved to batch level
 
             return multivector
 
         except Exception as e:
             print(f"❌ Error generando embedding imagen: {e}")
             return None
+
+    def generar_embedding_imagen_batch(self, imagen_paths: List[str]) -> List[np.ndarray]:
+        """
+        Genera embeddings ColPali multi-vector para un batch de imágenes.
+        Optimización Bolt ⚡: Procesa múltiples imágenes en un solo paso de GPU.
+        """
+        if self.colpali_model is None:
+            return []
+        try:
+            images = [self._preprocesar_imagen(p) for p in imagen_paths]
+            batch_images = self.colpali_processor.process_images(images)
+            batch_images = {k: v.to(self.colpali_model.device) for k, v in batch_images.items()}
+
+            with torch.no_grad():
+                image_embeddings = self.colpali_model(**batch_images)
+
+            # Extraer multivectores para cada imagen en el batch
+            return [image_embeddings[i].cpu().float().numpy() for i in range(len(imagen_paths))]
+        except Exception as e:
+            print(f"❌ Error generando embedding imagen batch: {e}")
+            return []
 
     def generar_embedding_texto(self, texto: str) -> Optional[np.ndarray]:
         """
@@ -385,13 +406,32 @@ class ProcesadorColPaliPuro:
             multivector = text_embeddings[0].cpu().float().numpy()
             
             del batch_queries, text_embeddings
-            cleanup_memory()
+            # cleanup_memory() - Removed per Bolt's optimization: moved to batch level
             
             return multivector
 
         except Exception as e:
             print(f"❌ Error generando embedding texto: {e}")
             return None
+
+    def generar_embedding_texto_batch(self, textos: List[str]) -> List[np.ndarray]:
+        """
+        Genera embeddings ColPali multi-vector para un batch de textos.
+        Optimización Bolt ⚡: Procesa múltiples textos en un solo paso de GPU.
+        """
+        if self.colpali_model is None:
+            return []
+        try:
+            batch_queries = self.colpali_processor.process_queries(textos)
+            batch_queries = {k: v.to(self.colpali_model.device) for k, v in batch_queries.items()}
+
+            with torch.no_grad():
+                text_embeddings = self.colpali_model(**batch_queries)
+
+            return [text_embeddings[i].cpu().float().numpy() for i in range(len(textos))]
+        except Exception as e:
+            print(f"❌ Error generando embedding texto batch: {e}")
+            return []
 
     def generar_fde_muvera(self, multivectors: np.ndarray) -> np.ndarray:
         """
@@ -860,34 +900,53 @@ Responde basándote ÚNICAMENTE en el contexto de arriba. Cita las fuentes.""")
             cleanup_memory()
 
     async def _procesar_contenido_batch(self, chunks, imagenes, pdf_name, tipo="texto"):
+        """
+        Procesa contenido en batches para optimizar la generación de embeddings.
+        Optimización Bolt ⚡: Batching real para mayor velocidad y menor overhead de memoria.
+        """
         contenidos = chunks if tipo == "texto" else [img["path"] for img in imagenes]
-        batch_mv, batch_fde = [], []
 
-        for i, contenido in enumerate(contenidos):
+        for i in range(0, len(contenidos), Config.BATCH_SIZE):
+            batch_contenidos = contenidos[i:i + Config.BATCH_SIZE]
+            batch_mv, batch_fde = [], []
+
+            # Generación de embeddings en batch (mucho más eficiente en GPU)
             if tipo == "texto":
-                mv_embedding = self.procesador.generar_embedding_texto(contenido)
-                payload = {"pdf_name": str(pdf_name), "tipo": "texto", "texto": contenido[:500]}
+                embeddings = self.procesador.generar_embedding_texto_batch(batch_contenidos)
             else:
-                mv_embedding = self.procesador.generar_embedding_imagen(contenido)
-                payload = {"pdf_name": str(pdf_name), "tipo": "imagen", "imagen_path": contenido, "contexto_texto": chunks[i] if i < len(chunks) else ""}
+                embeddings = self.procesador.generar_embedding_imagen_batch(batch_contenidos)
 
-            if mv_embedding is None: continue
-            fde_embedding = self.procesador.generar_fde_muvera(mv_embedding)
+            for j, mv_embedding in enumerate(embeddings):
+                if mv_embedding is None: continue
 
-            # Generar un ID UUID determinístico basado en el contenido para evitar duplicados y errores 400
-            seed_id = f"{Path(pdf_name).stem}_{tipo}_{i}"
-            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, seed_id))
+                idx = i + j
+                contenido = batch_contenidos[j]
 
-            batch_mv.append(PointStruct(id=point_id, vector=mv_embedding.tolist(), payload=payload))
-            batch_fde.append(PointStruct(id=point_id, vector=fde_embedding.tolist(), payload=payload))
+                if tipo == "texto":
+                    payload = {"pdf_name": str(pdf_name), "tipo": "texto", "texto": contenido[:500]}
+                else:
+                    payload = {
+                        "pdf_name": str(pdf_name),
+                        "tipo": "imagen",
+                        "imagen_path": contenido,
+                        "contexto_texto": chunks[idx] if idx < len(chunks) else ""
+                    }
 
-            if len(batch_mv) >= Config.BATCH_SIZE:
+                # Generación de FDE MUVERA
+                fde_embedding = self.procesador.generar_fde_muvera(mv_embedding)
+
+                # ID determinístico para evitar duplicados
+                seed_id = f"{Path(pdf_name).stem}_{tipo}_{idx}"
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, seed_id))
+
+                batch_mv.append(PointStruct(id=point_id, vector=mv_embedding.tolist(), payload=payload))
+                batch_fde.append(PointStruct(id=point_id, vector=fde_embedding.tolist(), payload=payload))
+
+            if batch_mv:
+                # Inserción en batch en Qdrant
                 await self.gestor_qdrant.insertar_batch_muvera(batch_mv, batch_fde)
-                batch_mv, batch_fde = [], []
+                # Cleanup al finalizar cada batch para liberar memoria GPU/CPU sin bloquear cada item
                 cleanup_memory()
-
-        if batch_mv:
-            await self.gestor_qdrant.insertar_batch_muvera(batch_mv, batch_fde)
 
     async def procesar_consulta(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> str:
         initial_state = AgentState(
