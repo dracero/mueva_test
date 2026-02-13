@@ -1,0 +1,3 @@
+## 2025-02-13 - Batching ColPali Embeddings
+**Learning:** Sequential embedding generation with large multimodal models like ColPali is extremely inefficient due to model forward pass overhead and frequent garbage collection/memory synchronization. Batching multiple images or text queries into a single model call significantly improves throughput by utilizing the model's ability to process tensors in parallel.
+**Action:** Always implement batch processing for model inference during indexing. Control batch size to balance throughput and memory usage. Minimize blocking memory cleanup operations (like `gc.collect()` and `torch.cuda.empty_cache()`) within high-frequency loops; instead, call them once per batch.
