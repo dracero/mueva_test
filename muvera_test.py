@@ -336,62 +336,68 @@ class ProcesadorColPaliPuro:
 
         return image
 
-    def generar_embedding_imagen(self, imagen_path: str) -> Optional[np.ndarray]:
+    def generar_embedding_imagen_batch(self, imagen_paths: List[str]) -> List[np.ndarray]:
         """
-        Genera embedding ColPali multi-vector para imagen
+        Genera embeddings ColPali multi-vector para un batch de imágenes
         """
-        if self.colpali_model is None:
-            print("⚠️ ColPali no disponible")
-            return None
+        if self.colpali_model is None or not imagen_paths:
+            return []
 
         try:
-            image = self._preprocesar_imagen(imagen_path)
+            images = [self._preprocesar_imagen(path) for path in imagen_paths]
             
-            batch_images = self.colpali_processor.process_images([image])
+            batch_images = self.colpali_processor.process_images(images)
             batch_images = {k: v.to(self.colpali_model.device) for k, v in batch_images.items()}
 
             with torch.no_grad():
                 image_embeddings = self.colpali_model(**batch_images)
 
-            # Multi-vector output (late interaction)
-            multivector = image_embeddings[0].cpu().float().numpy()
+            # Multi-vector output per image
+            multivectors = [emb.cpu().float().numpy() for emb in image_embeddings]
 
-            del image, batch_images, image_embeddings
-            cleanup_memory()
-
-            return multivector
+            del images, batch_images, image_embeddings
+            return multivectors
 
         except Exception as e:
-            print(f"❌ Error generando embedding imagen: {e}")
-            return None
+            print(f"❌ Error generando embedding imagen batch: {e}")
+            return []
 
-    def generar_embedding_texto(self, texto: str) -> Optional[np.ndarray]:
+    def generar_embedding_texto_batch(self, textos: List[str]) -> List[np.ndarray]:
         """
-        Genera embedding ColPali multi-vector para TEXTO
+        Genera embeddings ColPali multi-vector para un batch de TEXTO
         """
-        if self.colpali_model is None:
-            print("⚠️ ColPali no disponible")
-            return None
+        if self.colpali_model is None or not textos:
+            return []
 
         try:
-            # ColPali procesa queries textuales
-            batch_queries = self.colpali_processor.process_queries([texto])
+            batch_queries = self.colpali_processor.process_queries(textos)
             batch_queries = {k: v.to(self.colpali_model.device) for k, v in batch_queries.items()}
             
             with torch.no_grad():
                 text_embeddings = self.colpali_model(**batch_queries)
             
-            # Multi-vector output
-            multivector = text_embeddings[0].cpu().float().numpy()
+            multivectors = [emb.cpu().float().numpy() for emb in text_embeddings]
             
             del batch_queries, text_embeddings
-            cleanup_memory()
-            
-            return multivector
+            return multivectors
 
         except Exception as e:
-            print(f"❌ Error generando embedding texto: {e}")
-            return None
+            print(f"❌ Error generando embedding texto batch: {e}")
+            return []
+
+    def generar_embedding_imagen(self, imagen_path: str) -> Optional[np.ndarray]:
+        """
+        Genera embedding ColPali multi-vector para imagen
+        """
+        embs = self.generar_embedding_imagen_batch([imagen_path])
+        return embs[0] if embs else None
+
+    def generar_embedding_texto(self, texto: str) -> Optional[np.ndarray]:
+        """
+        Genera embedding ColPali multi-vector para TEXTO
+        """
+        embs = self.generar_embedding_texto_batch([texto])
+        return embs[0] if embs else None
 
     def generar_fde_muvera(self, multivectors: np.ndarray) -> np.ndarray:
         """
@@ -861,35 +867,52 @@ Responde basándote ÚNICAMENTE en el contexto de arriba. Cita las fuentes.""")
 
     async def _procesar_contenido_batch(self, chunks, imagenes, pdf_name, tipo="texto"):
         contenidos = chunks if tipo == "texto" else [img["path"] for img in imagenes]
-        batch_mv, batch_fde = [], []
 
-        for i, contenido in enumerate(contenidos):
+        # Procesar en batches para aprovechar GPU y paralelismo
+        for i in range(0, len(contenidos), Config.BATCH_SIZE):
+            batch_slice = contenidos[i:i + Config.BATCH_SIZE]
+
             if tipo == "texto":
-                mv_embedding = self.procesador.generar_embedding_texto(contenido)
-                payload = {"pdf_name": str(pdf_name), "tipo": "texto", "texto": contenido[:500]}
+                mv_embeddings = self.procesador.generar_embedding_texto_batch(batch_slice)
             else:
-                mv_embedding = self.procesador.generar_embedding_imagen(contenido)
-                payload = {"pdf_name": str(pdf_name), "tipo": "imagen", "imagen_path": contenido, "contexto_texto": chunks[i] if i < len(chunks) else ""}
+                mv_embeddings = self.procesador.generar_embedding_imagen_batch(batch_slice)
 
-            if mv_embedding is None: continue
-            fde_embedding = self.procesador.generar_fde_muvera(mv_embedding)
+            batch_mv, batch_fde = [], []
+            for j, mv_embedding in enumerate(mv_embeddings):
+                idx = i + j
+                contenido = batch_slice[j]
 
-            # Generar un ID UUID determinístico basado en el contenido para evitar duplicados y errores 400
-            seed_id = f"{Path(pdf_name).stem}_{tipo}_{i}"
-            point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, seed_id))
+                if tipo == "texto":
+                    payload = {"pdf_name": str(pdf_name), "tipo": "texto", "texto": contenido[:500]}
+                else:
+                    payload = {"pdf_name": str(pdf_name), "tipo": "imagen", "imagen_path": contenido, "contexto_texto": chunks[idx] if idx < len(chunks) else ""}
 
-            batch_mv.append(PointStruct(id=point_id, vector=mv_embedding.tolist(), payload=payload))
-            batch_fde.append(PointStruct(id=point_id, vector=fde_embedding.tolist(), payload=payload))
+                fde_embedding = self.generar_fde_muvera(mv_embedding) if hasattr(self, 'generar_fde_muvera') else self.procesador.generar_fde_muvera(mv_embedding)
 
-            if len(batch_mv) >= Config.BATCH_SIZE:
+                # Generar un ID UUID determinístico basado en el contenido para evitar duplicados
+                seed_id = f"{Path(pdf_name).stem}_{tipo}_{idx}"
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, seed_id))
+
+                batch_mv.append(PointStruct(id=point_id, vector=mv_embedding.tolist(), payload=payload))
+                batch_fde.append(PointStruct(id=point_id, vector=fde_embedding.tolist(), payload=payload))
+
+            if batch_mv:
                 await self.gestor_qdrant.insertar_batch_muvera(batch_mv, batch_fde)
-                batch_mv, batch_fde = [], []
+                # Cleanup al final de cada batch, no en cada item
                 cleanup_memory()
 
-        if batch_mv:
-            await self.gestor_qdrant.insertar_batch_muvera(batch_mv, batch_fde)
-
     async def procesar_consulta(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> str:
+        """
+        Procesa una consulta multimodal y retorna la respuesta final como texto.
+        Mantiene compatibilidad con versiones anteriores.
+        """
+        resultado = await self.procesar_consulta_completa(consulta, imagen_path, imagen_base64, user_id)
+        return resultado["respuesta"]
+
+    async def procesar_consulta_completa(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> Dict[str, Any]:
+        """
+        Procesa una consulta multimodal y retorna tanto la respuesta como metadatos y estado final.
+        """
         initial_state = AgentState(
             messages=[], consulta_usuario=consulta, imagen_consulta=imagen_path,
             imagen_base64=imagen_base64,
@@ -900,7 +923,14 @@ Responde basándote ÚNICAMENTE en el contexto de arriba. Cita las fuentes.""")
         )
         config = {"configurable": {"thread_id": user_id}}
         final_state = await self.compiled_graph.ainvoke(initial_state, config=config)
-        return final_state["respuesta_final"]
+
+        return {
+            "respuesta": final_state["respuesta_final"],
+            "resultados": final_state["resultados_busqueda"],
+            "imagenes": final_state["imagenes_relevantes"],
+            "tiempo_total": time.time() - final_state["tiempo_inicio"],
+            "state": final_state
+        }
 
     def cerrar(self):
         cleanup_memory()
@@ -941,14 +971,16 @@ class AsistenteHistologiaMultimodal(SistemaRAGColPaliPuro):
         await self.procesar_pdfs([str(f) for f in pdf_files])
 
     async def iniciar_flujo_multimodal(self, consulta_usuario=None, imagen_path=None, imagen_base64=None, ground_truth=None):
-        """Alias para procesar_consulta con formato de retorno anterior"""
-        respuesta = await self.procesar_consulta(consulta_usuario or "Analizar contenido", imagen_path, imagen_base64)
+        """Alias para procesar_consulta con formato de retorno anterior, optimizado para evitar búsquedas redundantes"""
+        # Ya no hacemos search_muvera por separado, procesar_consulta ya incluye la búsqueda en el grafo
+        resultado = await self.procesar_consulta_completa(consulta_usuario or "Analizar contenido", imagen_path, imagen_base64)
+
         return {
-            "respuesta": respuesta,
+            "respuesta": resultado["respuesta"],
             "analisis_imagen": "Ver respuesta",
-            "resultados_similares": await self.search_muvera(consulta_usuario, imagen_path),
+            "resultados_similares": {"pages": resultado["resultados"]},
             "scores_ragas": {},
-            "tiempo": 0
+            "tiempo": resultado["tiempo_total"]
         }
 
     async def search_muvera(self, query=None, image_path=None, top_k=5, prefetch_multiplier=5):
@@ -1003,8 +1035,8 @@ async def main():
                 entrada = input(">> ").strip()
                 if entrada.lower() in ['salir', 'exit', 'quit']: break
                 if entrada:
-                    res = await sistema.procesar_consulta(entrada)
-                    print(f"\n📖 RESPUESTA:\n{res}\n")
+                    res = await sistema.procesar_consulta_completa(entrada)
+                    print(f"\n📖 RESPUESTA ({res['tiempo_total']:.2f}s):\n{res['respuesta']}\n")
             except KeyboardInterrupt: break
             except Exception as e: print(f"❌ Error: {e}")
     finally:
