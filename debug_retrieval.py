@@ -30,11 +30,11 @@ async def debug_retrieval():
     print(f"\n\n🔎 CONSULTA MULTIMODAL: '{consulta}' + IMAGEN")
     
     # Ejecutar flujo completo y capturar logs (muvera_test ya imprime)
-    respuesta = await sistema.procesar_consulta(consulta=consulta, imagen_path=latest_file)
+    resultado = await sistema.procesar_consulta_completa(consulta=consulta, imagen_path=latest_file)
     
     print("\n--------------------------------------------------")
-    print("🤖 RESPUESTA FINAL DEL AGENTE:")
-    print(respuesta)
+    print(f"🤖 RESPUESTA FINAL DEL AGENTE ({resultado['tiempo_total']:.2f}s):")
+    print(resultado['respuesta'])
     print("--------------------------------------------------")
 
     sistema.cerrar()
