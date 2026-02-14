@@ -28,7 +28,7 @@ import asyncio
 import base64
 import uuid
 import nest_asyncio
-from typing import TypedDict, Annotated, List, Dict, Any, Optional
+from typing import TypedDict, Annotated, List, Dict, Any, Optional, Tuple
 from pathlib import Path
 import operator
 import hashlib
@@ -121,6 +121,10 @@ class Config:
     ENHANCE_BRIGHTNESS = True
     CONTRAST_FACTOR = 1.2
     BRIGHTNESS_FACTOR = 1.1
+
+    # Parámetros de búsqueda
+    SEARCH_SCORE_THRESHOLD = 550.0
+    SEARCH_PREFETCH_MULTIPLIER = 50
 
     @classmethod
     def setup_directories(cls):
@@ -506,23 +510,27 @@ class GestorQdrantMuvera:
         query_multivector: np.ndarray,
         query_fde: np.ndarray,
         top_k: int = 5,
-        prefetch_multiplier: int = 5
-    ) -> List[Dict]:
+        prefetch_multiplier: int = Config.SEARCH_PREFETCH_MULTIPLIER,
+        min_score: float = 0.0
+    ) -> Tuple[List[Dict], bool]:
         """
-        Búsqueda 2-stage con MUVERA
+        Búsqueda 2-stage con MUVERA. Retorna (resultados, has_rejected_candidates)
         """
         client = self.client
+        has_rejected = False
 
         try:
             # STAGE 1: Fast FDE search
+            # Optimizacion: with_payload=False para ahorrar memoria/ancho de banda
             fde_response = await client.query_points(
                 collection_name=self.content_fde_collection,
                 query=query_fde.tolist(),
-                limit=top_k * prefetch_multiplier
+                limit=top_k * prefetch_multiplier,
+                with_payload=False
             )
             
             if not fde_response.points:
-                return []
+                return [], False
             
             candidate_ids = [point.id for point in fde_response.points]
 
@@ -533,18 +541,32 @@ class GestorQdrantMuvera:
                 query_filter=Filter(
                     must=[HasIdCondition(has_id=candidate_ids)]
                 ),
-                limit=top_k
+                limit=top_k * 2  # Traemos un poco más para filtrar después
             )
 
-            return [{
-                "id": r.id,
-                "score": float(r.score),
-                "payload": r.payload
-            } for r in mv_response.points]
+            resultados = []
+            print(f"   🕵️ Reranking {len(mv_response.points)} candidatos (Threshold: {min_score})...")
+            for r in mv_response.points:
+                score = float(r.score)
+                if score >= min_score:
+                    resultados.append({
+                        "id": r.id,
+                        "score": score,
+                        "payload": r.payload
+                    })
+                else:
+                    print(f"      🗑️ Descartado (Score: {score:.2f} < {min_score}) - ID: {r.id}")
+                    has_rejected = True
+
+            # Si se rechazó ALGUNO, retornamos True en el flag.
+            # Nota: El usuario pidió "si alguno de los candidatos es rechazado". 
+            # Esto es estricto: incluso si hay buenos candidatos, si uno malo apareció en el top-k recuperado y fue filtrado, activamos el flag.
+            
+            return resultados[:top_k], has_rejected
 
         except Exception as e:
             print(f"❌ Error búsqueda MUVERA: {e}")
-            return []
+            return [], False
 
 # ============================================================================
 # ESTADO DEL GRAFO LANGGRAPH
@@ -568,7 +590,9 @@ class AgentState(TypedDict):
     trayectoria: Annotated[List[Dict[str, Any]], operator.add]
     imagen_base64: Optional[str]
     user_id: str
+
     tiempo_inicio: float
+    abortar_reset: bool
 
 # ============================================================================
 # SISTEMA PRINCIPAL CON LANGGRAPH
@@ -643,6 +667,7 @@ class SistemaRAGColPaliPuro:
         graph.add_node("optimizar_consulta", self._nodo_optimizar_consulta)
         graph.add_node("buscar", self._nodo_buscar)
         graph.add_node("generar_respuesta", self._nodo_generar_respuesta)
+        graph.add_node("reset", self._nodo_reset)
         graph.add_node("finalizar", self._nodo_finalizar)
 
         graph.add_edge(START, "recepcionar_consulta")
@@ -651,8 +676,19 @@ class SistemaRAGColPaliPuro:
         graph.add_edge("analizar_ontologia", "clasificar")
         graph.add_edge("clasificar", "optimizar_consulta")
         graph.add_edge("optimizar_consulta", "buscar")
-        graph.add_edge("buscar", "generar_respuesta")
+        
+        # Condicional después de buscar
+        graph.add_conditional_edges(
+            "buscar",
+            self._decidir_camino_tras_busqueda,
+            {
+                "generar": "generar_respuesta",
+                "reset": "reset"
+            }
+        )
+        
         graph.add_edge("generar_respuesta", "finalizar")
+        graph.add_edge("reset", "finalizar")
         graph.add_edge("finalizar", END)
 
         self.compiled_graph = graph.compile(checkpointer=self.memory_saver)
@@ -731,6 +767,8 @@ class SistemaRAGColPaliPuro:
 
     async def _nodo_buscar(self, state: AgentState) -> AgentState:
         resultados = []
+        has_rejected = False
+        state["abortar_reset"] = False # Default
         if state.get('imagen_consulta') and os.path.exists(state['imagen_consulta']):
             query_mv = self.procesador.generar_embedding_imagen(state['imagen_consulta'])
         else:
@@ -739,7 +777,11 @@ class SistemaRAGColPaliPuro:
         if query_mv is not None:
             print(f"\n🔍 Ejecutando búsqueda en Qdrant...")
             query_fde = self.procesador.generar_fde_muvera(query_mv)
-            resultados = await self.gestor_qdrant.buscar_muvera_2stage(query_mv, query_fde)
+            resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
+                query_mv, 
+                query_fde,
+                min_score=Config.SEARCH_SCORE_THRESHOLD
+            )
             
             print(f"\n📄 Resultados recuperados ({len(resultados)}):")
             for i, res in enumerate(resultados):
@@ -754,25 +796,52 @@ class SistemaRAGColPaliPuro:
                      print(f"       Imagen: {payload.get('imagen_path', 'N/A')}")
 
         state["resultados_busqueda"] = resultados
-        contextos = []
-        imagenes = []
-        for i, r in enumerate(resultados):
-            score = r.get('score', 0.0)
-            tipo = r['payload'].get('tipo', 'unknown')
-            pdf_name = r['payload'].get('pdf_name', 'desconocido')
-            if tipo == 'texto':
-                texto = r['payload'].get('texto', '')
-                contextos.append(f"[RESULTADO {i+1} - TEXTO - Score: {score:.2f} - Fuente: {pdf_name}]\n{texto[:800]}")
-            elif tipo == 'imagen':
-                img_path = r['payload'].get('imagen_path')
-                contexto_texto = r['payload'].get('contexto_texto', '')
-                if img_path:
-                    imagenes.append(img_path)
-                    contextos.append(f"[RESULTADO {i+1} - IMAGEN - Score: {score:.2f} - Fuente: {pdf_name}]\nArchivo: {os.path.basename(img_path)}\nTexto asociado a esta imagen: {contexto_texto[:600]}")
+        state["abortar_reset"] = has_rejected
 
-        state["contexto_documentos"] = "\n\n---\n\n".join(contextos)
-        state["imagenes_relevantes"] = imagenes
+        if has_rejected:
+            print("🚨 ALERTA: Candidatos rechazados detectados. Se abortará la generación para evitar errores de contexto excesivo.")
+            contextos = []
+            state["contexto_documentos"] = ""
+            state["imagenes_relevantes"] = []
+        else:
+            contextos = []
+            imagenes = []
+            for i, r in enumerate(resultados):
+                score = r.get('score', 0.0)
+                tipo = r['payload'].get('tipo', 'unknown')
+                pdf_name = r['payload'].get('pdf_name', 'desconocido')
+                page_num = r['payload'].get('numero_pagina', '?')
+                
+                if tipo == 'texto':
+                    texto = r['payload'].get('texto', '')
+                    contextos.append(f"[RESULTADO {i+1} - TEXTO - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]\n{texto[:800]}")
+                elif tipo == 'imagen':
+                    img_path = r['payload'].get('imagen_path')
+                    contexto_texto = r['payload'].get('contexto_texto', '')
+                    if img_path:
+                        imagenes.append(img_path)
+                        contextos.append(f"[RESULTADO {i+1} - IMAGEN - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]\nArchivo: {os.path.basename(img_path)}\nTexto asociado a esta imagen: {contexto_texto[:600]}")
+
+            state["contexto_documentos"] = "\n\n---\n\n".join(contextos)
+            state["imagenes_relevantes"] = imagenes
+            
         state["trayectoria"].append({"nodo": "buscar", "timestamp": time.time()})
+        return state
+
+    def _decidir_camino_tras_busqueda(self, state: AgentState) -> str:
+        """Decide si ir a generar respuesta o resetear"""
+        if state.get("abortar_reset", False):
+            return "reset"
+        return "generar"
+
+    async def _nodo_reset(self, state: AgentState) -> AgentState:
+        """Nodo de reset para detener generación insegura"""
+        print("🛑 RESET SYSTEM triggered due to low confidence candidates.")
+        state["respuesta_final"] = "No se puede contestar la consulta porque la información recuperada no tiene suficiente confianza (Score por debajo del umbral). Se ha realizado un reset preventivo."
+        state["imagenes_relevantes"] = []
+        state["contexto_documentos"] = ""
+        # Aquí podríamos limpiar más cosas si fuera necesario
+        state["trayectoria"].append({"nodo": "reset", "timestamp": time.time()})
         return state
 
     async def _nodo_generar_respuesta(self, state: AgentState) -> AgentState:
@@ -786,22 +855,32 @@ class SistemaRAGColPaliPuro:
         if state["imagenes_relevantes"]:
             info_imagen += f"\nSe encontraron {len(state['imagenes_relevantes'])} imágenes similares en la base de datos."
 
-        messages = [
-            SystemMessage(content="""Eres un profesor experto en histopatología. Tu función es responder EXCLUSIVAMENTE usando la información recuperada de la base de datos.
+        # Cargar imágenes recuperadas
+        content_parts = []
+        
+        # 1. Instrucciones del sistema (modificadas para multimodal)
+        system_prompt = """Eres un profesor experto en histopatología. Tu función es responder usando la información textual Y VISUAL recuperada de la base de datos.
 
 REGLAS ABSOLUTAS (NO NEGOCIABLES):
-1. SOLO puedes responder usando la información del CONTEXTO RECUPERADO que se te proporciona abajo.
-2. NUNCA uses tu propio conocimiento para identificar órganos, tejidos o estructuras. Tu conocimiento general SOLO sirve para explicar y enriquecer lo que dice el contexto recuperado.
-3. Si el contexto recuperado dice que es "ovario", tu respuesta DEBE decir que es ovario. Si dice "hígado", dices hígado. NUNCA contradigas el contexto.
-4. Cita explícitamente las fuentes: "Según el documento recuperado [nombre]..."
-5. Si el contexto recuperado no contiene información suficiente, di: "La base de datos no contiene información suficiente para responder esta consulta."
-6. ESTÁ PROHIBIDO decir frases como "esta información no es relevante" o "descarto el contexto" o "basándome en mi análisis propio".
+1. RESPONDE BASÁNDOTE EN EL CONTEXTO Y LAS IMÁGENES PROPORCIONADAS.
+2. Si se te proporcionan imágenes, OBSÉRVALAS DETENIDAMENTE. Úsalas para verificar si corresponden con lo que se pregunta (ej: "Figura 16-11" vs "Figura 16-3").
+3. Si el texto dice una cosa pero la imagen muestra claramente otra (ej: etiqueta incorrecta), SEÑALA LA DISCREPANCIA con amabilidad académica.
+4. Cita explícitamente las fuentes: "Según el documento recuperado [nombre] y la imagen adjunta..."
+5. NUNCA inventes información.
 
 ESTRUCTURA DE RESPUESTA:
-1. **Identificación**: Qué órgano/tejido/estructura identifica el contexto recuperado.
-2. **Evidencia del contexto**: Citar textualmente las partes relevantes del contexto recuperado.
-3. **Explicación didáctica**: Usar tu conocimiento para AMPLIAR (nunca contradecir) lo que dice el contexto."""),
-            HumanMessage(content=f"""CONSULTA DEL USUARIO: {state["consulta_usuario"]}
+1. **Análisis Visual**: Describe brevemente qué ves en las imágenes recuperadas más relevantes.
+2. **Identificación**: Qué órgano/tejido/estructura identifica el contexto recuperado.
+3. **Evidencia Combinada**: Integra lo que ves en la imagen con lo que dice el texto.
+4. **Explicación didáctica**: Amplía la explicación."""
+
+        messages = [
+            SystemMessage(content=system_prompt)
+        ]
+
+        # 2. Construir mensaje de usuario con texto e imágenes
+        user_content = [
+            {"type": "text", "text": f"""CONSULTA DEL USUARIO: {state["consulta_usuario"]}
 {info_imagen}
 
 ========================================
@@ -813,8 +892,46 @@ CONTEXTO RECUPERADO DE LA BASE DE DATOS
 
 ========================================
 
-Responde basándote ÚNICAMENTE en el contexto de arriba. Cita las fuentes.""")
+Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjuntas.
+"""}
         ]
+
+        # Añadir imágenes recuperadas al mensaje
+        for i, img_path in enumerate(state["imagenes_relevantes"]):
+            try:
+                if os.path.exists(img_path):
+                    with open(img_path, "rb") as image_file:
+                        image_data = base64.b64encode(image_file.read()).decode("utf-8")
+                    
+                    user_content.append({
+                        "type": "text", 
+                        "text": f"\n[IMAGEN RECUPERADA {i+1}: {os.path.basename(img_path)}]"
+                    })
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}
+                    })
+                    print(f"   🖼️ Adjuntando imagen al prompt: {os.path.basename(img_path)}")
+            except Exception as e:
+                print(f"   ⚠️ Error cargando imagen {img_path}: {e}")
+
+        # Si el usuario subió una imagen, también la adjuntamos
+        if state.get('imagen_consulta') and os.path.exists(state['imagen_consulta']):
+            try:
+                with open(state['imagen_consulta'], "rb") as image_file:
+                    query_image_data = base64.b64encode(image_file.read()).decode("utf-8")
+                user_content.append({
+                    "type": "text",
+                    "text": "\n[IMAGEN DE CONSULTA DEL USUARIO]"
+                })
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{query_image_data}"}
+                })
+            except Exception as e:
+                print(f"   ⚠️ Error cargando imagen de consulta: {e}")
+
+        messages.append(HumanMessage(content=user_content))
 
 
         response = await self.llm.ainvoke(messages)
@@ -832,50 +949,100 @@ Responde basándote ÚNICAMENTE en el contexto de arriba. Cita las fuentes.""")
 
     # ========== MÉTODOS DE PROCESAMIENTO ==========
 
-    def leer_pdf(self, archivo: str) -> str:
+    def leer_pdf(self, archivo: str) -> List[Dict[str, Any]]:
         try:
             reader = PdfReader(archivo)
-            texto = "".join(page.extract_text() or "" for page in reader.pages)
-            return texto
+            paginas = []
+            for i, page in enumerate(reader.pages):
+                texto = page.extract_text()
+                if texto:
+                    paginas.append({"texto": texto, "pagina": i + 1})
+            return paginas
         except Exception as e:
             print(f"❌ Error leyendo PDF: {e}")
-            return ""
+            return []
 
-    def split_texto(self, texto: str) -> List[str]:
+    def split_texto(self, paginas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        chunks = []
         size = Config.TEXT_CHUNK_SIZE
         overlap = Config.TEXT_CHUNK_OVERLAP
-        return [texto[i:i + size] for i in range(0, len(texto), size - overlap)]
+        
+        for pagina in paginas:
+            texto = pagina["texto"]
+            num_pag = pagina["pagina"]
+            if len(texto) < size:
+                chunks.append({"texto": texto, "pagina": num_pag})
+                continue
+                
+            for i in range(0, len(texto), size - overlap):
+                chunk_text = texto[i:i + size]
+                chunks.append({"texto": chunk_text, "pagina": num_pag})
+                
+        return chunks
 
     async def procesar_pdfs(self, archivos: List[str], forzar: bool = False):
         await self.gestor_qdrant.crear_colecciones()
         for archivo in archivos:
             if not os.path.exists(archivo): continue
-            texto = self.leer_pdf(archivo)
-            chunks = self.split_texto(texto)
+            
+            # Obtener texto por páginas
+            paginas_info = self.leer_pdf(archivo)
+            chunks_info = self.split_texto(paginas_info)
+            
+            # Reconstruir texto completo para ontología
+            texto_completo = "\n".join([p["texto"] for p in paginas_info])
+            
             imagenes = self.procesador.extraer_imagenes_pdf(archivo)
             if not self.ontologia:
-                self.ontologia = self.extractor_ontologia.extraer_ontologia_completa(texto, len(imagenes))
-            await self._procesar_contenido_batch(chunks, None, archivo, tipo="texto")
-            await self._procesar_contenido_batch(chunks, imagenes, archivo, tipo="imagen")
+                self.ontologia = self.extractor_ontologia.extraer_ontologia_completa(texto_completo, len(imagenes))
+                
+            await self._procesar_contenido_batch(chunks_info, None, archivo, tipo="texto")
+            await self._procesar_contenido_batch(chunks_info, imagenes, archivo, tipo="imagen")
             cleanup_memory()
 
-    async def _procesar_contenido_batch(self, chunks, imagenes, pdf_name, tipo="texto"):
-        contenidos = chunks if tipo == "texto" else [img["path"] for img in imagenes]
+    async def _procesar_contenido_batch(self, chunks_info, imagenes, pdf_name, tipo="texto"):
+        # items = chunks_info (List[Dict]) or imagenes (List[Dict])
+        items = chunks_info if tipo == "texto" else imagenes
         batch_mv, batch_fde = [], []
 
-        for i, contenido in enumerate(contenidos):
+        for i, item in enumerate(items):
             if tipo == "texto":
+                contenido = item["texto"]
+                page_num = item["pagina"]
                 mv_embedding = self.procesador.generar_embedding_texto(contenido)
-                payload = {"pdf_name": str(pdf_name), "tipo": "texto", "texto": contenido[:500]}
+                payload = {
+                    "pdf_name": str(pdf_name), 
+                    "tipo": "texto", 
+                    "texto": contenido[:500],
+                    "numero_pagina": page_num
+                }
             else:
+                # Imagen
+                contenido = item["path"]
+                page_num = item["page"]
                 mv_embedding = self.procesador.generar_embedding_imagen(contenido)
-                payload = {"pdf_name": str(pdf_name), "tipo": "imagen", "imagen_path": contenido, "contexto_texto": chunks[i] if i < len(chunks) else ""}
+                
+                # Contexto de texto: Intentamos buscar chunks de la misma pagina
+                contexto_texto = ""
+                if chunks_info:
+                    # Buscar primer chunk que coincida con la pagina
+                    chunks_pag = [c["texto"] for c in chunks_info if c["pagina"] == page_num]
+                    if chunks_pag:
+                        contexto_texto = chunks_pag[0]
+
+                payload = {
+                    "pdf_name": str(pdf_name), 
+                    "tipo": "imagen", 
+                    "imagen_path": contenido, 
+                    "contexto_texto": contexto_texto[:1000],
+                    "numero_pagina": page_num
+                }
 
             if mv_embedding is None: continue
             fde_embedding = self.procesador.generar_fde_muvera(mv_embedding)
 
             # Generar un ID UUID determinístico basado en el contenido para evitar duplicados y errores 400
-            seed_id = f"{Path(pdf_name).stem}_{tipo}_{i}"
+            seed_id = f"{Path(pdf_name).stem}_{tipo}_{page_num}_{i}"
             point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, seed_id))
 
             batch_mv.append(PointStruct(id=point_id, vector=mv_embedding.tolist(), payload=payload))
@@ -896,7 +1063,8 @@ Responde basándote ÚNICAMENTE en el contexto de arriba. Cita las fuentes.""")
             contexto_memoria="", ontologia=self.ontologia or {}, contexto_ontologico="",
             clasificacion="", consulta_optimizada="", filtros_ontologia=[],
             resultados_busqueda=[], contexto_documentos="", imagenes_relevantes=[],
-            respuesta_final="", trayectoria=[], user_id=user_id, tiempo_inicio=time.time()
+            respuesta_final="", trayectoria=[], user_id=user_id, tiempo_inicio=time.time(),
+            abortar_reset=False
         )
         config = {"configurable": {"thread_id": user_id}}
         final_state = await self.compiled_graph.ainvoke(initial_state, config=config)
@@ -962,7 +1130,7 @@ class AsistenteHistologiaMultimodal(SistemaRAGColPaliPuro):
             return {"pages": []}
 
         query_fde = self.procesador.generar_fde_muvera(query_mv)
-        res = await self.gestor_qdrant.buscar_muvera_2stage(query_mv, query_fde, top_k, prefetch_multiplier)
+        res, _ = await self.gestor_qdrant.buscar_muvera_2stage(query_mv, query_fde, top_k, prefetch_multiplier)
         return {"pages": res}
 
 # ============================================================================
