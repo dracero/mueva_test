@@ -22,6 +22,7 @@ VENTAJAS vs versión con ColBERT:
 """
 
 import os
+import re
 import json
 import time
 import asyncio
@@ -123,8 +124,8 @@ class Config:
     BRIGHTNESS_FACTOR = 1.1
 
     # Parámetros de búsqueda
-    SEARCH_SCORE_THRESHOLD = 550.0
-    SEARCH_PREFETCH_MULTIPLIER = 50
+    SEARCH_SCORE_THRESHOLD = 500.0
+    SEARCH_PREFETCH_MULTIPLIER = 20  # Reducido de 50 para mejorar velocidad
 
     @classmethod
     def setup_directories(cls):
@@ -189,28 +190,51 @@ EXTRAE:
 4. FIGURAS: numeración y descripciones breves
 5. PATOLOGÍAS: alteraciones, lesiones comunes
 
-Formato JSON estructurado y compacto."""
+Responde SOLAMENTE con un JSON válido, sin texto adicional ni explicaciones."""
 
-        try:
-            response = self.model.generate_content(prompt)
-            ontologia_texto = response.text.replace("```json", "").replace("```", "").strip()
-            ontologia = json.loads(ontologia_texto)
+        for intento in range(2):
+            try:
+                response = self.model.generate_content(prompt if intento == 0 else
+                    f"Extrae una ontología en formato JSON puro (sin markdown) del siguiente texto de histopatología:\n{contenido[:5000]}")
+                
+                ontologia_texto = response.text.strip()
+                # Limpiar markdown code blocks
+                if '```' in ontologia_texto:
+                    # Extraer contenido entre los primeros ``` y los últimos ```
+                    bloques = ontologia_texto.split('```')
+                    for bloque in bloques:
+                        bloque_limpio = bloque.strip()
+                        if bloque_limpio.startswith('json'):
+                            bloque_limpio = bloque_limpio[4:].strip()
+                        if bloque_limpio.startswith('{'):
+                            ontologia_texto = bloque_limpio
+                            break
+                
+                ontologia = json.loads(ontologia_texto)
 
-            ontologia["metadata"] = {
-                "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "modelo": "gemini-2.5-flash",
-                "num_imagenes": num_imagenes
-            }
+                ontologia["metadata"] = {
+                    "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "modelo": "gemini-2.5-flash",
+                    "num_imagenes": num_imagenes
+                }
 
-            with open(Config.ONTOLOGY_FILE, 'w', encoding='utf-8') as f:
-                json.dump(ontologia, f, indent=2, ensure_ascii=False)
+                with open(Config.ONTOLOGY_FILE, 'w', encoding='utf-8') as f:
+                    json.dump(ontologia, f, indent=2, ensure_ascii=False)
 
-            print(f"✅ Ontología extraída: {len(ontologia)} categorías")
-            return ontologia
+                print(f"✅ Ontología extraída: {len(ontologia)} categorías")
+                return ontologia
 
-        except Exception as e:
-            print(f"⚠️ Error ontología: {e}")
-            return {"sistemas_anatomicos": [], "metadata": {"tipo": "default"}}
+            except json.JSONDecodeError as e:
+                print(f"⚠️ Intento {intento+1}/2 - Error parsing JSON ontología: {e}")
+                if intento == 0:
+                    print("   Reintentando con prompt simplificado...")
+                    continue
+            except Exception as e:
+                print(f"⚠️ Error ontología (intento {intento+1}): {e}")
+                break
+
+        print("⚠️ No se pudo extraer ontología. Continuando sin ella.")
+        return {"sistemas_anatomicos": [], "metadata": {"tipo": "default"}}
 
     def cargar_ontologia(self) -> Optional[Dict]:
         """Cargar ontología desde archivo"""
@@ -361,7 +385,7 @@ class ProcesadorColPaliPuro:
             multivector = image_embeddings[0].cpu().float().numpy()
 
             del image, batch_images, image_embeddings
-            cleanup_memory()
+            # cleanup_memory()  <-- Removido por lentitud excesiva
 
             return multivector
 
@@ -389,7 +413,7 @@ class ProcesadorColPaliPuro:
             multivector = text_embeddings[0].cpu().float().numpy()
             
             del batch_queries, text_embeddings
-            cleanup_memory()
+            # cleanup_memory()  <-- Removido por lentitud excesiva
             
             return multivector
 
@@ -775,13 +799,20 @@ class SistemaRAGColPaliPuro:
             query_mv = self.procesador.generar_embedding_texto(state['consulta_optimizada'])
 
         if query_mv is not None:
+            t0 = time.time()
             print(f"\n🔍 Ejecutando búsqueda en Qdrant...")
-            query_fde = self.procesador.generar_fde_muvera(query_mv)
+            
+            # Generar query FDE (usando método correcto para queries)
+            query_fde = self.procesador.generar_query_muvera(query_mv)
+            
+            t1 = time.time()
             resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
                 query_mv, 
                 query_fde,
                 min_score=Config.SEARCH_SCORE_THRESHOLD
             )
+            t2 = time.time()
+            print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
             
             print(f"\n📄 Resultados recuperados ({len(resultados)}):")
             for i, res in enumerate(resultados):
@@ -814,13 +845,18 @@ class SistemaRAGColPaliPuro:
                 
                 if tipo == 'texto':
                     texto = r['payload'].get('texto', '')
-                    contextos.append(f"[RESULTADO {i+1} - TEXTO - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]\n{texto[:800]}")
+                    figuras = r['payload'].get('figuras', [])
+                    figuras_str = ", ".join(figuras) if figuras else ""
+                    figuras_info = f"\nFiguras mencionadas: {figuras_str}" if figuras_str else ""
+                    contextos.append(f"[RESULTADO {i+1} - TEXTO - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]{figuras_info}\n{texto[:800]}")
                 elif tipo == 'imagen':
                     img_path = r['payload'].get('imagen_path')
                     contexto_texto = r['payload'].get('contexto_texto', '')
+                    figuras = r['payload'].get('figuras', [])
+                    figuras_str = ", ".join(figuras) if figuras else "No identificadas"
                     if img_path:
                         imagenes.append(img_path)
-                        contextos.append(f"[RESULTADO {i+1} - IMAGEN - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]\nArchivo: {os.path.basename(img_path)}\nTexto asociado a esta imagen: {contexto_texto[:600]}")
+                        contextos.append(f"[RESULTADO {i+1} - IMAGEN - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]\nArchivo: {os.path.basename(img_path)}\nFiguras en esta página: {figuras_str}\nTexto asociado a esta imagen: {contexto_texto[:600]}")
 
             state["contexto_documentos"] = "\n\n---\n\n".join(contextos)
             state["imagenes_relevantes"] = imagenes
@@ -863,15 +899,16 @@ class SistemaRAGColPaliPuro:
 
 REGLAS ABSOLUTAS (NO NEGOCIABLES):
 1. RESPONDE BASÁNDOTE EN EL CONTEXTO Y LAS IMÁGENES PROPORCIONADAS.
-2. Si se te proporcionan imágenes, OBSÉRVALAS DETENIDAMENTE. Úsalas para verificar si corresponden con lo que se pregunta (ej: "Figura 16-11" vs "Figura 16-3").
-3. Si el texto dice una cosa pero la imagen muestra claramente otra (ej: etiqueta incorrecta), SEÑALA LA DISCREPANCIA con amabilidad académica.
-4. Cita explícitamente las fuentes: "Según el documento recuperado [nombre] y la imagen adjunta..."
-5. NUNCA inventes información.
+2. Si se te proporcionan imágenes, OBSÉRVALAS DETENIDAMENTE y analiza su contenido histológico.
+3. Cada resultado indica qué figuras contiene esa página (campo "Figuras en esta página" o "Figuras mencionadas"). USA esta información para identificar exactamente qué figura estás viendo.
+4. Si una figura específica preguntada por el usuario no se encuentra en el material recuperado, RESPONDE IGUALMENTE con la información más cercana disponible. NO te limites a decir que no está disponible. Analiza las imágenes recuperadas y explica qué muestran.
+5. Cita explícitamente las fuentes: "Según el documento recuperado [nombre] y la imagen adjunta..."
+6. NUNCA inventes información, pero SÍ analiza visualmente lo que recibes.
 
 ESTRUCTURA DE RESPUESTA:
-1. **Análisis Visual**: Describe brevemente qué ves en las imágenes recuperadas más relevantes.
-2. **Identificación**: Qué órgano/tejido/estructura identifica el contexto recuperado.
-3. **Evidencia Combinada**: Integra lo que ves en la imagen con lo que dice el texto.
+1. **Análisis Visual**: Describe qué ves en las imágenes recuperadas.
+2. **Identificación**: Qué órgano/tejido/estructura se observa.
+3. **Evidencia Combinada**: Integra lo que ves en la imagen con lo que dice el texto. Si la figura exacta solicitada no está en el material, indica cuál es la más cercana y analízala.
 4. **Explicación didáctica**: Amplía la explicación."""
 
         messages = [
@@ -949,6 +986,23 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
 
     # ========== MÉTODOS DE PROCESAMIENTO ==========
 
+    def _extraer_figuras_de_texto(self, texto: str) -> List[str]:
+        """Extrae identificadores de figuras mencionadas en el texto de una página.
+        Maneja ruido de OCR: middle dots (·), tildes (~), espacios, etc."""
+        patrones = [
+            r'[Ff]igura\s+(\d+[\-\.·]\d+)',
+            r'[Ff]i[gG~][\.\s]*\s*(\d+[\-\.·\s]\d+)',
+            r'FIGURA\s+(\d+[\-\.·]\d+)',
+            r'[Ff]tg[\.\s]*\s*(\d+[\-\.·]\d+)',
+        ]
+        figuras = set()
+        for patron in patrones:
+            matches = re.findall(patron, texto)
+            for m in matches:
+                normalizado = re.sub(r'[·\.\s]', '-', m)
+                figuras.add(f"Figura {normalizado}")
+        return sorted(list(figuras))
+
     def leer_pdf(self, archivo: str) -> List[Dict[str, Any]]:
         try:
             reader = PdfReader(archivo)
@@ -1014,7 +1068,9 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
                     "pdf_name": str(pdf_name), 
                     "tipo": "texto", 
                     "texto": contenido[:500],
-                    "numero_pagina": page_num
+                    "numero_pagina": page_num,
+                    "figuras": self._extraer_figuras_de_texto(contenido),
+                    "nombre_archivo": Path(pdf_name).stem
                 }
             else:
                 # Imagen
@@ -1024,18 +1080,24 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
                 
                 # Contexto de texto: Intentamos buscar chunks de la misma pagina
                 contexto_texto = ""
+                figuras_en_pagina = []
                 if chunks_info:
-                    # Buscar primer chunk que coincida con la pagina
+                    # Buscar chunks que coincidan con la pagina
                     chunks_pag = [c["texto"] for c in chunks_info if c["pagina"] == page_num]
                     if chunks_pag:
                         contexto_texto = chunks_pag[0]
+                    # Intentar regex sobre el texto de la página
+                    texto_completo_pagina = " ".join(chunks_pag)
+                    figuras_en_pagina = self._extraer_figuras_de_texto(texto_completo_pagina)
 
                 payload = {
                     "pdf_name": str(pdf_name), 
                     "tipo": "imagen", 
                     "imagen_path": contenido, 
                     "contexto_texto": contexto_texto[:1000],
-                    "numero_pagina": page_num
+                    "numero_pagina": page_num,
+                    "figuras": figuras_en_pagina,
+                    "nombre_archivo": Path(pdf_name).stem
                 }
 
             if mv_embedding is None: continue
