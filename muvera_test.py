@@ -77,9 +77,11 @@ from langgraph.graph.message import add_messages
 
 # Gemini para extracción de ontología
 import google.generativeai as genai
+from langchain_groq import ChatGroq
 
 # Configuración de credenciales local
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_KEY = os.getenv("QDRANT_KEY")
 LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
@@ -154,15 +156,14 @@ def cleanup_memory():
 # ============================================================================
 
 class ExtractorOntologia:
-    """Extrae ontología histopatológica usando Gemini"""
+    """Extrae ontología histopatológica usando Groq"""
 
     def __init__(self, api_key: str):
         if not api_key:
-            print("⚠️ API Key de Google no proporcionada para ExtractorOntologia")
+            print("⚠️ API Key de Groq no proporcionada para ExtractorOntologia")
             self.model = None
             return
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.model = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, api_key=api_key)
 
     def extraer_ontologia_completa(self, contenido: str, num_imagenes: int) -> Dict:
         """Extrae ontología completa del documento"""
@@ -188,13 +189,13 @@ EXTRAE:
 Formato JSON estructurado y compacto."""
 
         try:
-            response = self.model.generate_content(prompt)
-            ontologia_texto = response.text.replace("```json", "").replace("```", "").strip()
+            response = self.model.invoke(prompt)
+            ontologia_texto = response.content.replace("```json", "").replace("```", "").strip()
             ontologia = json.loads(ontologia_texto)
 
             ontologia["metadata"] = {
                 "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "modelo": "gemini-2.5-flash",
+                "modelo": "llama-3.3-70b-versatile",
                 "num_imagenes": num_imagenes
             }
 
@@ -595,6 +596,8 @@ class SistemaRAGColPaliPuro:
         """Configurar APIs"""
         if GOOGLE_API_KEY:
             os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+        if GROQ_API_KEY:
+            os.environ["GROQ_API_KEY"] = GROQ_API_KEY
         setup_langsmith()
 
     def inicializar_componentes(self):
@@ -604,10 +607,11 @@ class SistemaRAGColPaliPuro:
         print("="*80)
 
         # LLM
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+        self.llm = ChatGroq(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             temperature=0,
-            google_api_key=GOOGLE_API_KEY
+            api_key=GROQ_API_KEY,
+            max_retries=1
         )
 
         # Configurar directorio de uploads para imágenes temporales
@@ -625,7 +629,7 @@ class SistemaRAGColPaliPuro:
         )
 
         # Extractor de ontología
-        self.extractor_ontologia = ExtractorOntologia(GOOGLE_API_KEY)
+        self.extractor_ontologia = ExtractorOntologia(GROQ_API_KEY)
         self.ontologia = self.extractor_ontologia.cargar_ontologia()
 
         # LangGraph
@@ -710,9 +714,18 @@ class SistemaRAGColPaliPuro:
 
     async def _nodo_clasificar(self, state: AgentState) -> AgentState:
         info_imagen = f"\nImagen adjunta: Sí" if state.get('imagen_consulta') else "\nImagen adjunta: No"
+        
+        content_items = [{"type": "text", "text": f"CONSULTA: {state['consulta_usuario']}{info_imagen}\nCONTEXTO ONTOLÓGICO:\n{state['contexto_ontologico']}"}]
+        if state.get('imagen_consulta') and os.path.exists(state['imagen_consulta']):
+            with open(state['imagen_consulta'], "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode("utf-8")
+                content_items.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
+        elif state.get('imagen_base64'):
+            content_items.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{state['imagen_base64']}"}})
+
         messages = [
             SystemMessage(content="Eres un experto en histopatología. Clasifica consultas."),
-            HumanMessage(content=f"CONSULTA: {state['consulta_usuario']}{info_imagen}\nCONTEXTO ONTOLÓGICO:\n{state['contexto_ontologico']}")
+            HumanMessage(content=content_items)
         ]
         response = await self.llm.ainvoke(messages)
         state["clasificacion"] = response.content
@@ -786,9 +799,30 @@ class SistemaRAGColPaliPuro:
         if state["imagenes_relevantes"]:
             info_imagen += f"\nSe encontraron {len(state['imagenes_relevantes'])} imágenes similares en la base de datos."
 
+        text_prompt = f"""CONSULTA DEL USUARIO: {state["consulta_usuario"]}
+{info_imagen}
+
+========================================
+CONTEXTO RECUPERADO DE LA BASE DE DATOS
+(Esta es la ÚNICA fuente de verdad para tu respuesta)
+========================================
+
+{state["contexto_documentos"][:10000]}
+
+========================================
+
+Responde basándote ÚNICAMENTE en el contexto de arriba. Cita las fuentes."""
+
+        content_items = [{"type": "text", "text": text_prompt}]
+        if state.get('imagen_consulta') and os.path.exists(state['imagen_consulta']):
+            with open(state['imagen_consulta'], "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode("utf-8")
+                content_items.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
+        elif state.get('imagen_base64'):
+            content_items.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{state['imagen_base64']}"}})
+
         messages = [
             SystemMessage(content="""Eres un profesor experto en histopatología. Tu función es responder EXCLUSIVAMENTE usando la información recuperada de la base de datos.
-
 REGLAS ABSOLUTAS (NO NEGOCIABLES):
 1. SOLO puedes responder usando la información del CONTEXTO RECUPERADO que se te proporciona abajo.
 2. NUNCA uses tu propio conocimiento para identificar órganos, tejidos o estructuras. Tu conocimiento general SOLO sirve para explicar y enriquecer lo que dice el contexto recuperado.
@@ -801,19 +835,7 @@ ESTRUCTURA DE RESPUESTA:
 1. **Identificación**: Qué órgano/tejido/estructura identifica el contexto recuperado.
 2. **Evidencia del contexto**: Citar textualmente las partes relevantes del contexto recuperado.
 3. **Explicación didáctica**: Usar tu conocimiento para AMPLIAR (nunca contradecir) lo que dice el contexto."""),
-            HumanMessage(content=f"""CONSULTA DEL USUARIO: {state["consulta_usuario"]}
-{info_imagen}
-
-========================================
-CONTEXTO RECUPERADO DE LA BASE DE DATOS
-(Esta es la ÚNICA fuente de verdad para tu respuesta)
-========================================
-
-{state["contexto_documentos"][:10000]}
-
-========================================
-
-Responde basándote ÚNICAMENTE en el contexto de arriba. Cita las fuentes.""")
+            HumanMessage(content=content_items)
         ]
 
 
