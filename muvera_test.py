@@ -11,7 +11,7 @@ ARQUITECTURA SIMPLIFICADA:
 - MUVERA: Two-stage retrieval (FDE rápido + MV preciso)
 - Qdrant: Base de datos vectorial con soporte multi-vector
 - LangGraph: Orquestación de agentes multi-paso
-- Gemini 2.5 Flash: Generación de respuestas
+- Groq Llama-4 Scout: Generación de respuestas
 
 VENTAJAS vs versión con ColBERT:
 ✅ Más simple (1 modelo en lugar de 2)
@@ -68,7 +68,7 @@ from colpali_engine.models import ColPali as ColPaliModel
 from colpali_engine.models import ColPaliProcessor
 
 # LangChain
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 
 # LangGraph
@@ -76,11 +76,11 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.message import add_messages
 
-# Gemini para extracción de ontología
-import google.generativeai as genai
+# Groq para extracción de ontología
+from groq import Groq as GroqClient
 
 # Configuración de credenciales local
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_KEY = os.getenv("QDRANT_KEY")
 LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
@@ -124,7 +124,7 @@ class Config:
     BRIGHTNESS_FACTOR = 1.1
 
     # Parámetros de búsqueda
-    SEARCH_SCORE_THRESHOLD = 500.0
+    SEARCH_SCORE_THRESHOLD = 550.0
     SEARCH_PREFETCH_MULTIPLIER = 20  # Reducido de 50 para mejorar velocidad
 
     @classmethod
@@ -140,7 +140,7 @@ def setup_langsmith():
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
         os.environ["LANGCHAIN_API_KEY"] = LANGSMITH_API_KEY
         os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-        os.environ["LANGCHAIN_PROJECT"] = "rag_histopatologia_colpali_puro"
+        os.environ["LANGCHAIN_PROJECT"] = "rag_histopatologia_llama_groq"
         print("✅ LangSmith configurado")
         return True
     except:
@@ -159,15 +159,15 @@ def cleanup_memory():
 # ============================================================================
 
 class ExtractorOntologia:
-    """Extrae ontología histopatológica usando Gemini"""
+    """Extrae ontología histopatológica usando Groq"""
 
     def __init__(self, api_key: str):
         if not api_key:
-            print("⚠️ API Key de Google no proporcionada para ExtractorOntologia")
+            print("⚠️ API Key de Groq no proporcionada para ExtractorOntologia")
             self.model = None
             return
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self._groq_client = GroqClient(api_key=api_key)
+        self.model = "meta-llama/llama-4-scout-17b-16e-instruct"
 
     def extraer_ontologia_completa(self, contenido: str, num_imagenes: int) -> Dict:
         """Extrae ontología completa del documento"""
@@ -194,10 +194,14 @@ Responde SOLAMENTE con un JSON válido, sin texto adicional ni explicaciones."""
 
         for intento in range(2):
             try:
-                response = self.model.generate_content(prompt if intento == 0 else
-                    f"Extrae una ontología en formato JSON puro (sin markdown) del siguiente texto de histopatología:\n{contenido[:5000]}")
-                
-                ontologia_texto = response.text.strip()
+                prompt_actual = prompt if intento == 0 else \
+                    f"Extrae una ontología en formato JSON puro (sin markdown) del siguiente texto de histopatología:\n{contenido[:5000]}"
+                response = self._groq_client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt_actual}],
+                    temperature=0
+                )
+                ontologia_texto = response.choices[0].message.content.strip()
                 # Limpiar markdown code blocks
                 if '```' in ontologia_texto:
                     # Extraer contenido entre los primeros ``` y los últimos ```
@@ -214,7 +218,7 @@ Responde SOLAMENTE con un JSON válido, sin texto adicional ni explicaciones."""
 
                 ontologia["metadata"] = {
                     "fecha": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "modelo": "gemini-2.5-flash",
+                    "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
                     "num_imagenes": num_imagenes
                 }
 
@@ -571,6 +575,8 @@ class GestorQdrantMuvera:
             resultados = []
             print(f"   🕵️ Reranking {len(mv_response.points)} candidatos (Threshold: {min_score})...")
             for r in mv_response.points:
+                # The search scores coming from colPali/Muvera via Qdrant are usually very high, e.g. 500k+
+                # We no longer scale by 1000 here
                 score = float(r.score)
                 if score >= min_score:
                     resultados.append({
@@ -580,17 +586,89 @@ class GestorQdrantMuvera:
                     })
                 else:
                     print(f"      🗑️ Descartado (Score: {score:.2f} < {min_score}) - ID: {r.id}")
-                    has_rejected = True
 
-            # Si se rechazó ALGUNO, retornamos True en el flag.
-            # Nota: El usuario pidió "si alguno de los candidatos es rechazado". 
-            # Esto es estricto: incluso si hay buenos candidatos, si uno malo apareció en el top-k recuperado y fue filtrado, activamos el flag.
+            # Ordenamos por score descendente por si acaso (aunque Qdrant ya los trae ordenados)
+            resultados.sort(key=lambda x: x['score'], reverse=True)
             
-            return resultados[:top_k], has_rejected
+            # Limitar a top_k *después* de filtrar
+            resultados = resultados[:top_k]
+            
+            # Si NO hay resultados válidos después de filtrar, entonces consideramos "has_rejected" = True
+            if not resultados:
+                has_rejected = True
+                
+            return resultados, has_rejected
 
         except Exception as e:
             print(f"❌ Error búsqueda MUVERA: {e}")
             return [], False
+
+# ============================================================================
+# GESTOR DE MEMORIA A LARGO PLAZO (CHROMADB)
+# ============================================================================
+
+import sqlite3
+import datetime
+
+class MemoriaSQLite:
+    """Gestor de memoria lineal usando SQLite y resúmenes con LLM"""
+    def __init__(self, db_path: str = "./chat_memory.sqlite"):
+        self.db_path = db_path
+        self._init_db()
+        
+    def _init_db(self):
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS interactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                user_query TEXT,
+                summary TEXT
+            )
+        ''')
+        conn.commit()
+        conn.close()
+        
+    def add_interaction_summary(self, session_id: str, user_query: str, summary: str):
+        if not user_query.strip() or not summary.strip():
+            return
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute(
+                "INSERT INTO interactions (session_id, timestamp, user_query, summary) VALUES (?, ?, ?, ?)",
+                (session_id, datetime.datetime.now(), user_query, summary)
+            )
+            conn.commit()
+            conn.close()
+            print(f"   💾 Resumen guardado en memoria SQLite (Sesión: {session_id})")
+        except Exception as e:
+            print(f"   ⚠️ Error guardando en SQLite: {e}")
+            
+    def get_relevant_history(self, session_id: str, n_results: int = 5) -> str:
+        try:
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            # Obtener las interacciones más recientes para dar contexto lineal temporal
+            c.execute(
+                "SELECT summary FROM interactions WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?", 
+                (session_id, n_results)
+            )
+            rows = c.fetchall()
+            conn.close()
+            
+            if not rows:
+                return ""
+            
+            # Invertimos para que queden en orden cronológico (más viejo a más nuevo)
+            rows.reverse()
+            history = "\n---\n".join([row[0] for row in rows])
+            return history
+        except Exception as e:
+            print(f"   ⚠️ Error recuperando memoria SQLite: {e}")
+            return ""
 
 # ============================================================================
 # ESTADO DEL GRAFO LANGGRAPH
@@ -637,12 +715,13 @@ class SistemaRAGColPaliPuro:
         self.extractor_ontologia = None
         self.ontologia = None
         self.compiled_graph = None
-        self.memory_saver = MemorySaver()
+        self.compiled_graph = None
+        self.memoria = None # Se inicializa despues del procesador
 
     def _setup_apis(self):
         """Configurar APIs"""
-        if GOOGLE_API_KEY:
-            os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
+        if GROQ_API_KEY:
+            os.environ["GROQ_API_KEY"] = GROQ_API_KEY
         setup_langsmith()
 
     def inicializar_componentes(self):
@@ -652,10 +731,10 @@ class SistemaRAGColPaliPuro:
         print("="*80)
 
         # LLM
-        self.llm = ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
+        self.llm = ChatGroq(
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
             temperature=0,
-            google_api_key=GOOGLE_API_KEY
+            api_key=GROQ_API_KEY
         )
 
         # Configurar directorio de uploads para imágenes temporales
@@ -665,6 +744,9 @@ class SistemaRAGColPaliPuro:
         # Procesador ColPali PURO
         self.procesador = ProcesadorColPaliPuro()
 
+        # Memoria SQLite Lineal
+        self.memoria = MemoriaSQLite(db_path=str(Config.BASE_DIR / 'chat_memory.sqlite'))
+
         # Qdrant
         self.gestor_qdrant = GestorQdrantMuvera(
             url=QDRANT_URL or "http://localhost:6333",
@@ -673,7 +755,7 @@ class SistemaRAGColPaliPuro:
         )
 
         # Extractor de ontología
-        self.extractor_ontologia = ExtractorOntologia(GOOGLE_API_KEY)
+        self.extractor_ontologia = ExtractorOntologia(GROQ_API_KEY)
         self.ontologia = self.extractor_ontologia.cargar_ontologia()
 
         # LangGraph
@@ -715,7 +797,7 @@ class SistemaRAGColPaliPuro:
         graph.add_edge("reset", "finalizar")
         graph.add_edge("finalizar", END)
 
-        self.compiled_graph = graph.compile(checkpointer=self.memory_saver)
+        self.compiled_graph = graph.compile()
 
     # ========== NODOS DEL GRAFO ==========
 
@@ -753,6 +835,16 @@ class SistemaRAGColPaliPuro:
     async def _nodo_inicializar(self, state: AgentState) -> AgentState:
         state["ontologia"] = self.ontologia or {}
         state["tiempo_inicio"] = time.time()
+        
+        print(f"   🧠 Recuperando memoria semántica para sesión {state['user_id']}...")
+        history = self.memoria.get_relevant_history(
+            session_id=state["user_id"],
+            n_results=5
+        )
+        state["contexto_memoria"] = history
+        if history:
+            print(f"   ✅ Memoria recuperada: {len(history)} caracteres")
+            
         state["trayectoria"].append({"nodo": "inicializar", "timestamp": time.time()})
         return state
 
@@ -873,7 +965,7 @@ class SistemaRAGColPaliPuro:
     async def _nodo_reset(self, state: AgentState) -> AgentState:
         """Nodo de reset para detener generación insegura"""
         print("🛑 RESET SYSTEM triggered due to low confidence candidates.")
-        state["respuesta_final"] = "No se puede contestar la consulta porque la información recuperada no tiene suficiente confianza (Score por debajo del umbral). Se ha realizado un reset preventivo."
+        state["respuesta_final"] = "No esta en base de datos."
         state["imagenes_relevantes"] = []
         state["contexto_documentos"] = ""
         # Aquí podríamos limpiar más cosas si fuera necesario
@@ -915,9 +1007,14 @@ ESTRUCTURA DE RESPUESTA:
             SystemMessage(content=system_prompt)
         ]
 
+        if state.get("contexto_memoria"):
+            historial = f"\n========================================\nHISTORIAL DE CONVERSACIÓN RELEVANTE:\n{state['contexto_memoria']}\n========================================\n"
+        else:
+            historial = ""
+
         # 2. Construir mensaje de usuario con texto e imágenes
         user_content = [
-            {"type": "text", "text": f"""CONSULTA DEL USUARIO: {state["consulta_usuario"]}
+            {"type": "text", "text": f"""{historial}CONSULTA DEL USUARIO: {state["consulta_usuario"]}
 {info_imagen}
 
 ========================================
@@ -933,8 +1030,15 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
 """}
         ]
 
+        # Limitar número de imágenes por restricción de Groq (max 5)
+        max_imagenes_recuperadas = 4 if (state.get('imagen_consulta') and os.path.exists(state['imagen_consulta'])) else 5
+        imagenes_a_procesar = state["imagenes_relevantes"][:max_imagenes_recuperadas]
+        
+        if len(state["imagenes_relevantes"]) > max_imagenes_recuperadas:
+            print(f"   ⚠️ Limitando a {max_imagenes_recuperadas} imágenes (de {len(state['imagenes_relevantes'])}) por restricción de API.")
+
         # Añadir imágenes recuperadas al mensaje
-        for i, img_path in enumerate(state["imagenes_relevantes"]):
+        for i, img_path in enumerate(imagenes_a_procesar):
             try:
                 if os.path.exists(img_path):
                     with open(img_path, "rb") as image_file:
@@ -981,6 +1085,30 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
         return state
 
     async def _nodo_finalizar(self, state: AgentState) -> AgentState:
+        # Guardar la interacción actual en la memoria a largo plazo
+        # Limitar la respuesta final para el resumen para evitar saturar el LLM
+        respuesta_final_val = state.get("respuesta_final", "")
+        consulta_usuario_val = state.get("consulta_usuario", "")
+        respuesta_corta = respuesta_final_val[:2000]
+        
+        # Generar un resumen rápido usando el LLM
+        if self.memoria is not None and respuesta_final_val and consulta_usuario_val:
+            try:
+                print("   📝 Resumiendo interacción para la memoria...")
+                messages = [
+                    SystemMessage(content="Eres un asistente que resume interacciones. Escribe un resumen MUY BREVE (1-3 oraciones) de lo que preguntó el usuario y lo que respondiste o concluiste."),
+                    HumanMessage(content=f"USUARIO: {consulta_usuario_val}\nASISTENTE: {respuesta_corta}")
+                ]
+                resume_response = await self.llm.ainvoke(messages)
+                summary = resume_response.content
+                
+                self.memoria.add_interaction_summary(
+                    session_id=state["user_id"],
+                    user_query=consulta_usuario_val,
+                    summary=f"Consulta: {consulta_usuario_val} | Resumen: {summary}"
+                )
+            except Exception as e:
+                print(f"   ⚠️ Error generando resumen de interacción: {e}")
         state["trayectoria"].append({"nodo": "finalizar", "timestamp": time.time()})
         return state
 
