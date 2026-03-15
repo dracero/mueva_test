@@ -46,6 +46,10 @@ load_dotenv()
 # PDFs e imágenes
 from PyPDF2 import PdfReader
 from pdf2image import convert_from_path
+try:
+    import fitz # PyMuPDF
+except ImportError:
+    fitz = None
 from PIL import Image, ImageEnhance
 import numpy as np
 
@@ -57,7 +61,7 @@ from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.models import (
     PointStruct, VectorParams, Distance,
     MultiVectorConfig, MultiVectorComparator,
-    Filter, HasIdCondition
+    Filter, HasIdCondition, FieldCondition
 )
 
 # MUVERA from fastembed
@@ -124,7 +128,7 @@ class Config:
     BRIGHTNESS_FACTOR = 1.1
 
     # Parámetros de búsqueda
-    SEARCH_SCORE_THRESHOLD = 548.0
+    SEARCH_SCORE_THRESHOLD = 868.0
     SEARCH_PREFETCH_MULTIPLIER = 20  # Reducido de 50 para mejorar velocidad
 
     @classmethod
@@ -319,12 +323,131 @@ class ProcesadorColPaliPuro:
         cleanup_memory()
 
     def extraer_imagenes_pdf(self, pdf_path: str) -> List[Dict]:
-        """Extrae páginas como imágenes del PDF"""
-        print(f"📄 Extrayendo páginas de {pdf_path}...")
+        """Extrae imágenes individuales del PDF (o páginas si no hay imágenes o falta PyMuPDF)"""
+        print(f"📄 Extrayendo imágenes de {pdf_path}...")
 
+        # Extraer imágenes del PDF
         imagenes = []
         nombre_base = Path(pdf_path).stem
         
+        # Extracción detallada usando PyMuPDF con filtro estricto de tamaño
+        # Dado que hay 1 figura principal por página, filtramos todo el ruido visual
+        if fitz is not None:
+            try:
+                doc = fitz.open(pdf_path)
+                image_count = 0
+                for page_num in range(len(doc)):
+                    page = doc[page_num]
+                    page_images_with_pos = []
+                    valid_images_this_page = []
+                    
+                    # MÉTODO PRIMARIO: get_image_info(xrefs=True) devuelve SOLO las imágenes
+                    # físicamente dibujadas en esta página (no el diccionario global del PDF)
+                    img_info_list = page.get_image_info(xrefs=True)
+                    page_xrefs = [info["xref"] for info in img_info_list if info.get("xref")]
+                    page_y_positions = {info["xref"]: info.get("bbox", (0,0,0,0))[1] for info in img_info_list if info.get("xref")}
+                    
+                    if page_xrefs:
+                        # Extraer imágenes por xref
+                        for xref in page_xrefs:
+                            try:
+                                base_image = doc.extract_image(xref)
+                                if not base_image:
+                                    continue
+                                
+                                image_bytes = base_image["image"]
+                                ext = base_image["ext"]
+                                y_position = page_y_positions.get(xref, 0.0)
+                                
+                                image_count += 1
+                                img_path = Config.EMBEDDINGS_DIR / f"{nombre_base}_p{page_num+1}_img{image_count}.{ext}"
+                                with open(img_path, "wb") as f:
+                                    f.write(image_bytes)
+                                    
+                                img_pil = Image.open(img_path)
+                                width, height = img_pil.size
+                                area = width * height
+                                
+                                # Filtro mínimo bajo: solo descarta íconos diminutos
+                                if width >= 150 and height >= 150:
+                                    if img_pil.mode != "RGB":
+                                        img_pil = img_pil.convert("RGB")
+                                    
+                                    img_path_rgb = Config.EMBEDDINGS_DIR / f"{nombre_base}_p{page_num+1}_img{image_count}.jpg"
+                                    img_pil.save(img_path_rgb, "JPEG")
+                                    
+                                    if str(img_path) != str(img_path_rgb):
+                                        os.remove(img_path)
+                                        
+                                    img_path = img_path_rgb
+
+                                    valid_images_this_page.append({
+                                        "page": page_num + 1,
+                                        "path": str(img_path),
+                                        "type": "extracted_figure",
+                                        "size": (width, height),
+                                        "area": area,
+                                        "y_position": y_position
+                                    })
+                                else:
+                                    os.remove(img_path)
+                            except Exception as e:
+                                print(f"⚠️ Error procesando xref {xref} en página {page_num+1}: {e}")
+                    else:
+                        # FALLBACK: get_image_info vacío → la imagen está incrustada como Form XObject
+                        # Renderizar la página completa como imagen usando pdf2image
+                        try:
+                            page_imgs = convert_from_path(
+                                pdf_path, first_page=page_num+1, last_page=page_num+1,
+                                dpi=Config.IMAGE_DPI, fmt='jpeg', size=Config.MAX_IMAGE_SIZE
+                            )
+                            if page_imgs:
+                                image_count += 1
+                                img_path = Config.EMBEDDINGS_DIR / f"{nombre_base}_p{page_num+1}_img{image_count}.jpg"
+                                page_imgs[0].save(str(img_path), "JPEG")
+                                width, height = page_imgs[0].size
+                                valid_images_this_page.append({
+                                    "page": page_num + 1,
+                                    "path": str(img_path),
+                                    "type": "page_render",
+                                    "size": (width, height),
+                                    "area": width * height,
+                                    "y_position": 0.0
+                                })
+                                print(f"      📸 Pg {page_num+1}: renderizada como página completa ({width}x{height})")
+                        except Exception as e:
+                            print(f"⚠️ Error renderizando página {page_num+1}: {e}")
+                    
+                    # Conservar SOLO la imagen más grande de la página
+                    if valid_images_this_page:
+                        largest_image = max(valid_images_this_page, key=lambda x: x["area"])
+                        
+                        for img_data in valid_images_this_page:
+                            if img_data["path"] != largest_image["path"]:
+                                try:
+                                    os.remove(img_data["path"])
+                                except OSError:
+                                    pass
+                                    
+                        page_images_with_pos.append(largest_image)
+                    
+                    for idx, img_data in enumerate(page_images_with_pos):
+                        img_data["img_index_in_page"] = idx
+                        img_data["total_images_in_page"] = len(page_images_with_pos)
+                    
+                    imagenes.extend(page_images_with_pos)
+
+                if len(imagenes) > 0:
+                    print(f"✅ {len(imagenes)} figuras extraídas vía PyMuPDF + fallback de renderizado")
+                    return imagenes
+                else:
+                    print("⚠️ No se encontraron figuras grandes, recurriendo a renderizado de página completa.")
+            except Exception as e:
+                print(f"⚠️ Error intentando extracción con PyMuPDF: {e}. Usando fallback a página entera.")
+        else:
+            print("⚠️ PyMuPDF (fitz) no instalado. Usando extracción de página completa.")
+            
+        # Fallback a renderizado de página completa
         try:
             # Nota: Requiere Poppler instalado en el sistema
             pages = convert_from_path(
@@ -539,7 +662,8 @@ class GestorQdrantMuvera:
         query_fde: np.ndarray,
         top_k: int = 5,
         prefetch_multiplier: int = Config.SEARCH_PREFETCH_MULTIPLIER,
-        min_score: float = 0.0
+        min_score: float = 0.0,
+        figuras_filtro: List[str] = None
     ) -> Tuple[List[Dict], bool]:
         """
         Búsqueda 2-stage con MUVERA. Retorna (resultados, has_rejected_candidates)
@@ -550,9 +674,22 @@ class GestorQdrantMuvera:
         try:
             # STAGE 1: Fast FDE search
             # Optimizacion: with_payload=False para ahorrar memoria/ancho de banda
+            qdrant_filter = None
+            if figuras_filtro:
+                from qdrant_client.models import MatchAny
+                qdrant_filter = Filter(
+                    should=[
+                        FieldCondition(
+                            key="figuras",
+                            match=MatchAny(any=figuras_filtro)
+                        )
+                    ]
+                )
+
             fde_response = await client.query_points(
                 collection_name=self.content_fde_collection,
                 query=query_fde.tolist(),
+                query_filter=qdrant_filter,
                 limit=top_k * prefetch_multiplier,
                 with_payload=False
             )
@@ -573,19 +710,27 @@ class GestorQdrantMuvera:
             )
 
             resultados = []
+            descartados = 0
             print(f"   🕵️ Reranking {len(mv_response.points)} candidatos (Threshold: {min_score})...")
             for r in mv_response.points:
-                # The search scores coming from colPali/Muvera via Qdrant are usually very high, e.g. 500k+
-                # We no longer scale by 1000 here
                 score = float(r.score)
-                if score >= min_score:
+                # Si estamos buscando específicamente una figura y esta la tiene, la guardamos sin importar el score
+                tiene_figura_exacta = False
+                if figuras_filtro and "figuras" in r.payload:
+                    if any(f in r.payload["figuras"] for f in figuras_filtro):
+                        tiene_figura_exacta = True
+                        
+                if score >= min_score or tiene_figura_exacta:
                     resultados.append({
                         "id": r.id,
                         "score": score,
                         "payload": r.payload
                     })
                 else:
-                    print(f"      🗑️ Descartado (Score: {score:.2f} < {min_score}) - ID: {r.id}")
+                    descartados += 1
+
+            if descartados > 0:
+                print(f"      🗑️ {descartados} candidatos descartados (score < {min_score})")
 
             # Ordenamos por score descendente por si acaso (aunque Qdrant ya los trae ordenados)
             resultados.sort(key=lambda x: x['score'], reverse=True)
@@ -897,14 +1042,34 @@ class SistemaRAGColPaliPuro:
             # Generar query FDE (usando método correcto para queries)
             query_fde = self.procesador.generar_query_muvera(query_mv)
             
+            # Buscar menciones de figuras en la consulta para forzar el filtrado exacto si es posible
+            figuras_en_consulta = self._extraer_figuras_de_texto(state['consulta_optimizada'])
+            
             t1 = time.time()
             resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
                 query_mv, 
                 query_fde,
-                min_score=Config.SEARCH_SCORE_THRESHOLD
+                min_score=Config.SEARCH_SCORE_THRESHOLD,
+                figuras_filtro=figuras_en_consulta
             )
             t2 = time.time()
             print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
+            
+            # Filtrar resultados: solo mantener la PRIMERA imagen (mayor score) + todos los textos
+            primera_imagen_vista = False
+            resultados_filtrados = []
+            for r in resultados:
+                tipo = r.get('payload', {}).get('tipo', 'unknown')
+                if tipo == 'imagen':
+                    if not primera_imagen_vista:
+                        primera_imagen_vista = True
+                        resultados_filtrados.append(r)
+                    else:
+                        img_name = os.path.basename(r.get('payload', {}).get('imagen_path', 'N/A'))
+                        print(f"   ⏭️ Imagen adicional descartada (solo se usa la principal): {img_name}")
+                else:
+                    resultados_filtrados.append(r)
+            resultados = resultados_filtrados
             
             print(f"\n📄 Resultados recuperados ({len(resultados)}):")
             for i, res in enumerate(resultados):
@@ -948,7 +1113,7 @@ class SistemaRAGColPaliPuro:
                     figuras_str = ", ".join(figuras) if figuras else "No identificadas"
                     if img_path:
                         imagenes.append(img_path)
-                        contextos.append(f"[RESULTADO {i+1} - IMAGEN - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]\nArchivo: {os.path.basename(img_path)}\nFiguras en esta página: {figuras_str}\nTexto asociado a esta imagen: {contexto_texto[:600]}")
+                        contextos.append(f"[RESULTADO PRINCIPAL - IMAGEN - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]\nArchivo: {os.path.basename(img_path)}\nFiguras en esta página: {figuras_str}\nTexto asociado a esta imagen: {contexto_texto[:600]}")
 
             state["contexto_documentos"] = "\n\n---\n\n".join(contextos)
             state["imagenes_relevantes"] = imagenes
@@ -979,9 +1144,9 @@ class SistemaRAGColPaliPuro:
         # Construir información sobre imágenes
         info_imagen = ""
         if state.get('imagen_consulta'):
-            info_imagen = "\nNOTA: El usuario proporcionó una imagen para análisis."
+            info_imagen = "\nNOTA: El usuario proporcionó una imagen para análisis. Las imágenes recuperadas de la base de datos son las MEJORES COINCIDENCIAS encontradas para esa imagen."
         if state["imagenes_relevantes"]:
-            info_imagen += f"\nSe encontraron {len(state['imagenes_relevantes'])} imágenes similares en la base de datos."
+            info_imagen += f"\nSe encontraron {len(state['imagenes_relevantes'])} imágenes coincidentes en la base de datos. DEBES describir estas imágenes usando el texto asociado."
 
         # Cargar imágenes recuperadas
         content_parts = []
@@ -989,24 +1154,30 @@ class SistemaRAGColPaliPuro:
         # 1. Instrucciones del sistema (modificadas para multimodal)
         system_prompt = """Eres un profesor experto en histopatología. Tu función es responder usando la información textual Y VISUAL recuperada de la base de datos.
 
-REGLA ESTRICTA DE PRECISIÓN Y CONTEXTO:
-Tu objetivo es responder a la consulta del usuario basándote ÚNICA y EXCLUSIVAMENTE en el contexto proporcionado (imágenes adjuntas y fragmentos de texto recuperados).
+REGLA FUNDAMENTAL SOBRE IMÁGENES RECUPERADAS:
+Las imágenes etiquetadas como [IMAGEN RECUPERADA] son el RESULTADO de una búsqueda por similitud en la base de datos. Estas imágenes YA PASARON un umbral de similitud alto y SON la mejor coincidencia encontrada. Por lo tanto:
+- DEBES describir y analizar las imágenes recuperadas usando el texto asociado que se proporciona en el contexto.
+- Si el usuario subió una imagen (etiquetada como [IMAGEN DE CONSULTA DEL USUARIO]), la imagen recuperada ES la coincidencia encontrada para esa consulta. Úsala como fuente de verdad.
+- NO rechaces una imagen recuperada diciendo que "no coincide" con la del usuario. El sistema de búsqueda ya validó la coincidencia.
+- Si una página contiene múltiples figuras (ej: Figura 11-2 y 11-3), DEBES analizar visualmente la imagen recuperada y compararla con las DESCRIPCIONES de cada figura en el texto asociado para determinar cuál es. NO asumas que es la primera figura de la lista. Identifica la figura correcta basándote en las características visuales (tipo de tejido, tinción, estructuras visibles) y las descripciones del texto.
+- Si el usuario preguntó por una figura específica, ENFÓCATE SOLO en esa figura y su descripción del texto asociado.
 
-1. Análisis de suficiencia: Antes de generar una respuesta, evalúa críticamente si el contexto suministrado tiene el nivel de detalle exacto para dar una respuesta certera.
-2. Acción ante falta de contexto: Si la información es completamente ausente en el contexto, tienes prohibido adivinar. Sin embargo, tienes permitido realizar deducciones lógicas siempre y cuando se apoyen estrictamente en el texto o imágenes proporcionadas en el contexto recuperado, citando qué parte del contexto te permite deducirlo.
-3. Respuesta de rechazo: Si aún así no es posible dar una respuesta precisa basada en el contexto, tu respuesta debe ser ÚNICA y EXACTAMENTE la siguiente frase: "No hay suficiente contexto o detalle en las fuentes proporcionadas para dar una respuesta precisa a tu consulta." No agregues introducciones, conclusiones parciales ni suposiciones bajo ninguna circunstancia.
+REGLAS DE PRECISIÓN:
+1. Responde basándote en el contexto proporcionado (imágenes recuperadas y fragmentos de texto).
+2. Puedes realizar deducciones lógicas apoyadas en el texto o imágenes del contexto, citando qué parte te permite deducirlo.
+3. Si NO se recuperó NINGUNA imagen ni texto relevante (contexto vacío), responde EXACTAMENTE: "No hay suficiente contexto o detalle en las fuentes proporcionadas para dar una respuesta precisa a tu consulta."
+4. NUNCA inventes información que no esté en el contexto.
 
-REGLAS ABSOLUTAS ADICIONALES:
-1. RESPONDE BASÁNDOTE EN EL CONTEXTO Y LAS IMÁGENES PROPORCIONADAS.
-2. Si se te proporcionan imágenes, OBSÉRVALAS DETENIDAMENTE y analiza su contenido histológico.
-3. Cada resultado indica qué figuras contiene esa página (campo "Figuras en esta página" o "Figuras mencionadas"). USA esta información para identificar exactamente qué figura estás viendo.
-4. Si hay información suficiente, cita explícitamente las fuentes: "Según el documento recuperado [nombre] y la imagen adjunta...".
-5. NUNCA inventes información.
+REGLAS SOBRE FIGURAS:
+1. Cada resultado indica qué figuras contiene esa página (campo "Figuras en esta página" o "Figuras mencionadas"). USA esta información.
+2. Si el usuario pregunta por una figura específica (ej: "Figura 14.3"), SOLO describe esa figura usando el texto asociado. NO describas las otras figuras de la misma página.
+3. Si la imagen recuperada contiene múltiples figuras en una sola imagen, identifica y describe SOLO la que el usuario solicitó.
 
-ESTRUCTURA DE RESPUESTA (Solo si el contexto es SUFICIENTE):
-1. **Análisis Visual**: Describe qué ves en las imágenes recuperadas.
-2. **Identificación**: Qué órgano/tejido/estructura se observa.
-3. **Evidencia Combinada**: Integra lo que ves en la imagen con lo que dice el texto."""
+ESTRUCTURA DE RESPUESTA:
+1. **Imagen encontrada**: Indica qué imagen se recuperó de la base de datos y su figura correspondiente.
+2. **Análisis Visual**: Describe qué se observa en la imagen recuperada según el texto asociado.
+3. **Identificación**: Qué órgano/tejido/estructura se observa.
+4. **Evidencia**: Integra lo que se ve en la imagen con lo que dice el texto del contexto."""
 
         messages = [
             SystemMessage(content=system_prompt)
@@ -1122,18 +1293,29 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
     def _extraer_figuras_de_texto(self, texto: str) -> List[str]:
         """Extrae identificadores de figuras mencionadas en el texto de una página.
         Maneja ruido de OCR: middle dots (·), tildes (~), espacios, etc."""
-        patrones = [
+        # Patrones con prefijo "Figura"
+        patrones_figura = [
             r'[Ff]igura\s+(\d+[\-\.·]\d+)',
             r'[Ff]i[gG~][\.\s]*\s*(\d+[\-\.·\s]\d+)',
             r'FIGURA\s+(\d+[\-\.·]\d+)',
             r'[Ff]tg[\.\s]*\s*(\d+[\-\.·]\d+)',
         ]
+        # Patrones con prefijo "Imagen"
+        patrones_imagen = [
+            r'[Ii]magen\s+(\d+[\-\.·]\d+)',
+            r'IMAGEN\s+(\d+[\-\.·]\d+)',
+        ]
         figuras = set()
-        for patron in patrones:
+        for patron in patrones_figura:
             matches = re.findall(patron, texto)
             for m in matches:
                 normalizado = re.sub(r'[·\.\s]', '-', m)
                 figuras.add(f"Figura {normalizado}")
+        for patron in patrones_imagen:
+            matches = re.findall(patron, texto)
+            for m in matches:
+                normalizado = re.sub(r'[·\.\s]', '-', m)
+                figuras.add(f"Imagen {normalizado}")
         return sorted(list(figuras))
 
     def leer_pdf(self, archivo: str) -> List[Dict[str, Any]]:
@@ -1213,15 +1395,33 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
                 
                 # Contexto de texto: Intentamos buscar chunks de la misma pagina
                 contexto_texto = ""
-                figuras_en_pagina = []
+                figura_asignada = []
                 if chunks_info:
                     # Buscar chunks que coincidan con la pagina
                     chunks_pag = [c["texto"] for c in chunks_info if c["pagina"] == page_num]
                     if chunks_pag:
-                        contexto_texto = chunks_pag[0]
-                    # Intentar regex sobre el texto de la página
-                    texto_completo_pagina = " ".join(chunks_pag)
-                    figuras_en_pagina = self._extraer_figuras_de_texto(texto_completo_pagina)
+                        contexto_texto = " ".join(chunks_pag)
+                    # Extraer todas las figuras de la página
+                    figuras_en_pagina = self._extraer_figuras_de_texto(contexto_texto)
+                    
+                    # Asignación por posición: usar el índice de la imagen en la página
+                    img_idx = item.get("img_index_in_page", 0)
+                    total_imgs = item.get("total_images_in_page", 1)
+                    
+                    if figuras_en_pagina and total_imgs > 1:
+                        # Ordenar figuras numéricamente para mapear con posición
+                        figuras_ordenadas = sorted(figuras_en_pagina)
+                        if img_idx < len(figuras_ordenadas):
+                            # Asignar SOLO la figura correspondiente a esta posición
+                            figura_asignada = [figuras_ordenadas[img_idx]]
+                            print(f"      📍 Imagen #{img_idx+1}/{total_imgs} en Pg {page_num} → {figura_asignada[0]}")
+                        else:
+                            # Más imágenes que figuras: asignar todas como fallback
+                            figura_asignada = figuras_en_pagina
+                            print(f"      ⚠️ Pg {page_num}: Imagen #{img_idx+1} no tiene figura exacta (solo hay {len(figuras_ordenadas)} figs en texto)")
+                    else:
+                        # Solo 1 imagen en la página, o no hay figuras: asignar todas
+                        figura_asignada = figuras_en_pagina
 
                 payload = {
                     "pdf_name": str(pdf_name), 
@@ -1229,7 +1429,7 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
                     "imagen_path": contenido, 
                     "contexto_texto": contexto_texto[:1000],
                     "numero_pagina": page_num,
-                    "figuras": figuras_en_pagina,
+                    "figuras": figura_asignada,
                     "nombre_archivo": Path(pdf_name).stem
                 }
 

@@ -1,139 +1,114 @@
 {
-  "ontologia_histopatologia": {
-    "SISTEMAS_ANATOMICOS": {
-      "Conceptos_Generales": [
-        "Esqueleto"
-      ],
-      "Organos_Regiones": [
-        "Tráquea",
-        "Laringe",
-        "Piel de Oreja",
-        "Pie de Feto",
-        "Encéfalo",
-        "Médula Espinal",
-        "Abdomen",
-        "Tórax",
-        "Hueso (general)",
-        "Hueso Largo"
-      ],
-      "Tejidos": {
-        "Tejido_Conectivo": [
-          "Tejido Conectivo General",
-          "Tejido Conectivo Especializado"
-        ],
-        "Tejido_Cartilaginoso": [
-          "Cartílago Hialino",
-          "Cartílago Elástico",
-          "Cartílago Fibroso",
-          "Cartílago de Crecimiento",
-          "Cartílago Metafisiario",
-          "Cartílago Hialino del Disco de Crecimiento",
-          "Cartílago Hialino Embrionario"
-        ],
-        "Tejido_Oseo": [
-          "Hueso Compacto",
-          "Hueso Denso",
-          "Hueso Esponjoso",
-          "Hueso Trabecular"
-        ]
-      },
-      "Estructuras_Tisulares_Microanatomicas": [
-        "Pericondrio",
-        "Capa Fibrosa (del Pericondrio)",
-        "Capa Condrógena (del Pericondrio)",
-        "Matriz Territorial",
-        "Matriz Interterritorial",
-        "Periostio",
-        "Capa Fibrosa (del Periostio)",
-        "Capa Osteógena (del Periostio)",
-        "Endostio",
-        "Cavidad Medular",
-        "Lagunas Óseas",
-        "Canalículos",
-        "Lagunas de Howship",
-        "Osteona",
-        "Conducto de Havers",
-        "Conducto de Volckmann",
-        "Láminas Óseas",
-        "Disco de Crecimiento"
-      ]
-    },
-    "TERMINOLOGIA_HISTOLOGICA": {
-      "Tipos_Celulares": [
-        "Fibroblastos",
-        "Células Condrógenas",
-        "Condroblastos",
-        "Condrocitos",
-        "Células Osteoprogenitoras",
-        "Células Osteógenas",
-        "Osteoblastos",
-        "Osteocitos",
-        "Osteoclastos"
-      ],
-      "Componentes_Matriz": [
-        "Fibras de Colágena",
-        "Fibras Elásticas",
-        "Matriz Extracelular",
-        "Sustancia Fundamental Amorfa",
-        "Matriz Ósea"
-      ],
-      "Caracteristicas_Celulares_Morfologicas": [
-        "Fusiformes",
-        "Cuboideas",
-        "Elípticas",
-        "Gigantes",
-        "Multinucleadas",
-        "Núcleo Oval",
-        "Núcleo Grande",
-        "Núcleo Excéntrico",
-        "Citoplasma Basófilo",
-        "Prolongaciones"
-      ],
-      "Procesos_Funciones": [
-        "Formación de Matriz Ósea",
-        "Reabsorción (ósea)",
-        "Homeostasis del Calcio"
-      ],
-      "Organizacion_Tisular": [
-        "Nidos",
-        "Nichos",
-        "Grupos Isógenos"
-      ],
-      "Origen_Celular": [
-        "Mesénquima"
-      ]
-    },
-    "TECNICAS_Y_TINCIONES": {
-      "Equipo": [
-        "Microscopio Óptico"
-      ],
-      "Materiales": [
-        "Laminillas",
-        "Preparaciones Histológicas"
-      ],
-      "Metodos_Preparacion": [
-        "Hueso Lijado"
-      ],
-      "Tinciones": [
-        "H.E. (Hematoxilina-Eosina)"
-      ]
-    },
-    "FIGURAS": {
-      "11.1": "Tejido Conectivo Especializado, Cartílago Hialino.",
-      "11.2": "Tejido Conectivo Especializado, Cartílago Hialino.",
-      "11.3": "Tejido Conectivo Especializado, Cartílago Elástico.",
-      "11.4": "Tejido Conectivo Especializado, Cartílago Hialino del Disco de Crecimiento.",
-      "11.5": "Tejido Conectivo Especializado, Cartílago Fibroso.",
-      "11.6": "Tejido Conectivo Especializado, Cartílago embrionario.",
-      "12.1": "Tejido Óseo (Diagrama de tipos celulares y matriz)."
-    },
-    "PATOLOGIAS": [
-      "Hueso Fracturado"
-    ]
-  },
+  "sistemas_anatomicos": [
+    "Sistema cardiovascular",
+    "Sistema digestivo",
+    "Sistema endocrino",
+    "Sistema inmunológico/Linfático",
+    "Sistema integumentario (Piel)",
+    "Sistema muscular",
+    "Sistema nervioso",
+    "Sistema óseo/articular",
+    "Sistema reproductor femenino",
+    "Sistema reproductor masculino",
+    "Sistema respiratorio",
+    "Sistema urinario"
+  ],
+  "tejidos_basicos": [
+    "Tejido epitelial",
+    "Tejido conectivo (conjuntivo)",
+    "Tejido muscular",
+    "Tejido nervioso"
+  ],
+  "terminologia_histologica": [
+    "adipocito",
+    "axón",
+    "capilar",
+    "cartílago hialino",
+    "cartílago elástico",
+    "cartílago fibroso",
+    "célula caliciforme",
+    "célula epitelial",
+    "célula muscular lisa",
+    "célula muscular estriada",
+    "célula muscular cardíaca",
+    "citoplasma",
+    "condroblasto",
+    "condrocito",
+    "endotelio",
+    "eritrocito",
+    "epitelio escamoso estratificado",
+    "epitelio pseudoestratificado",
+    "epitelio simple cúbico",
+    "epitelio simple cilíndrico",
+    "fibroblasto",
+    "fibra colágena",
+    "fibra elástica",
+    "fibra reticular",
+    "leucocito",
+    "linfocito",
+    "macrófago",
+    "matriz extracelular",
+    "membrana basal",
+    "neurona",
+    "núcleo",
+    "osteoblasto",
+    "osteocito",
+    "osteoclasto",
+    "pericondrio",
+    "periostio"
+  ],
+  "estructuras_microscopicas": [
+    "alvéolo",
+    "bronquiolo",
+    "cápsula",
+    "conducto",
+    "corpúsculo renal",
+    "ducto excretor",
+    "folículo",
+    "glándula acinar",
+    "glándula tubular",
+    "glándula sebácea",
+    "glomérulo",
+    "islote de Langerhans",
+    "luz (lumen)",
+    "mucosa",
+    "submucosa",
+    "trabécula",
+    "vello intestinal",
+    "vaso sanguíneo"
+  ],
+  "tecnicas_y_tinciones": [
+    "Hematoxilina y Eosina (H&E)",
+    "PAS (Ácido Peryódico de Schiff)",
+    "Tricrómico de Masson",
+    "Reticulina (Plata)",
+    "Azul de Toluidina",
+    "Giemsa",
+    "Impregnación argéntica",
+    "Tinta china",
+    "Inmunohistoquímica (IHC)"
+  ],
+  "patologias_y_alteraciones": [
+    "adenoma",
+    "apoptosis",
+    "carcinoma",
+    "displasia",
+    "edema",
+    "fibrosis",
+    "hiperplasia",
+    "hipertrofia",
+    "inflamación aguda",
+    "inflamación crónica",
+    "isquemia",
+    "metaplasia",
+    "necrosis",
+    "neoplasia benigna",
+    "neoplasia maligna",
+    "sarcoma"
+  ],
   "metadata": {
-    "fecha": "2026-02-19 14:55:10",
-    "modelo": "gemini-2.5-flash",
-    "num_imagenes": 25
+    "tipo": "estandar_histopatologia",
+    "fuente": "Generada basada en estándares HPATH/SNOMED CT core concepts",
+    "fecha": "2026-03-15"
   }
 }
