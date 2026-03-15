@@ -124,7 +124,7 @@ class Config:
     BRIGHTNESS_FACTOR = 1.1
 
     # Parámetros de búsqueda
-    SEARCH_SCORE_THRESHOLD = 550.0
+    SEARCH_SCORE_THRESHOLD = 548.0
     SEARCH_PREFETCH_MULTIPLIER = 20  # Reducido de 50 para mejorar velocidad
 
     @classmethod
@@ -989,19 +989,24 @@ class SistemaRAGColPaliPuro:
         # 1. Instrucciones del sistema (modificadas para multimodal)
         system_prompt = """Eres un profesor experto en histopatología. Tu función es responder usando la información textual Y VISUAL recuperada de la base de datos.
 
-REGLAS ABSOLUTAS (NO NEGOCIABLES):
+REGLA ESTRICTA DE PRECISIÓN Y CONTEXTO:
+Tu objetivo es responder a la consulta del usuario basándote ÚNICA y EXCLUSIVAMENTE en el contexto proporcionado (imágenes adjuntas y fragmentos de texto recuperados).
+
+1. Análisis de suficiencia: Antes de generar una respuesta, evalúa críticamente si el contexto suministrado tiene el nivel de detalle exacto para dar una respuesta certera.
+2. Acción ante falta de contexto: Si la información es completamente ausente en el contexto, tienes prohibido adivinar. Sin embargo, tienes permitido realizar deducciones lógicas siempre y cuando se apoyen estrictamente en el texto o imágenes proporcionadas en el contexto recuperado, citando qué parte del contexto te permite deducirlo.
+3. Respuesta de rechazo: Si aún así no es posible dar una respuesta precisa basada en el contexto, tu respuesta debe ser ÚNICA y EXACTAMENTE la siguiente frase: "No hay suficiente contexto o detalle en las fuentes proporcionadas para dar una respuesta precisa a tu consulta." No agregues introducciones, conclusiones parciales ni suposiciones bajo ninguna circunstancia.
+
+REGLAS ABSOLUTAS ADICIONALES:
 1. RESPONDE BASÁNDOTE EN EL CONTEXTO Y LAS IMÁGENES PROPORCIONADAS.
 2. Si se te proporcionan imágenes, OBSÉRVALAS DETENIDAMENTE y analiza su contenido histológico.
 3. Cada resultado indica qué figuras contiene esa página (campo "Figuras en esta página" o "Figuras mencionadas"). USA esta información para identificar exactamente qué figura estás viendo.
-4. Si una figura específica preguntada por el usuario no se encuentra en el material recuperado, RESPONDE IGUALMENTE con la información más cercana disponible. NO te limites a decir que no está disponible. Analiza las imágenes recuperadas y explica qué muestran.
-5. Cita explícitamente las fuentes: "Según el documento recuperado [nombre] y la imagen adjunta..."
-6. NUNCA inventes información, pero SÍ analiza visualmente lo que recibes.
+4. Si hay información suficiente, cita explícitamente las fuentes: "Según el documento recuperado [nombre] y la imagen adjunta...".
+5. NUNCA inventes información.
 
-ESTRUCTURA DE RESPUESTA:
+ESTRUCTURA DE RESPUESTA (Solo si el contexto es SUFICIENTE):
 1. **Análisis Visual**: Describe qué ves en las imágenes recuperadas.
 2. **Identificación**: Qué órgano/tejido/estructura se observa.
-3. **Evidencia Combinada**: Integra lo que ves en la imagen con lo que dice el texto. Si la figura exacta solicitada no está en el material, indica cuál es la más cercana y analízala.
-4. **Explicación didáctica**: Amplía la explicación."""
+3. **Evidencia Combinada**: Integra lo que ves en la imagen con lo que dice el texto."""
 
         messages = [
             SystemMessage(content=system_prompt)
