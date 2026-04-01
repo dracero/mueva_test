@@ -1,6 +1,6 @@
 {
   "sistemas_anatomicos": [
-    "Tejido conectivo especializado",
+    "Tejido Conectivo Especializado",
     "Cartílago",
     "Hueso",
     "Pericondrio",
@@ -8,14 +8,15 @@
     "Endostio",
     "Tráquea",
     "Laringe",
-    "Piel de oreja de ratón",
+    "Piel de Oreja de ratón",
     "Hueso fracturado",
+    "Disco de Crecimiento",
     "Pie de feto"
   ],
   "terminologia_histologica": [
     "Pericondrio",
-    "Cartílago hialino",
     "Cartílago elástico",
+    "Cartílago hialino",
     "Cartílago fibroso",
     "Osteona",
     "Endostio",
@@ -26,11 +27,19 @@
     "Hueso compacto",
     "Hueso esponjoso",
     "Conducto de Havers",
-    "Conducto de Volckmann"
+    "Conducto de Volckmann",
+    "Nidos",
+    "Condrocitos",
+    "Condroblastos",
+    "Matriz territorial",
+    "Matriz interterritorial",
+    "Fibras elásticas",
+    "Fibras de colágena"
   ],
   "tecnicas_y_tinciones": [
+    "Microscopio óptico",
     "H.E. (Hematoxilina y Eosina)",
-    "Microscopía óptica"
+    "Laminillas"
   ],
   "figuras": [
     {
@@ -87,10 +96,11 @@
     }
   ],
   "patologias": [
-    "Hueso fracturado"
+    "Hueso fracturado",
+    "Lesiones óseas"
   ],
   "metadata": {
-    "fecha": "2026-03-31 22:41:59",
+    "fecha": "2026-04-01 16:46:02",
     "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
     "num_imagenes": 34
   }

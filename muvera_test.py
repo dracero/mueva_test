@@ -128,8 +128,26 @@ class Config:
     BRIGHTNESS_FACTOR = 1.1
 
     # Parámetros de búsqueda
-    SEARCH_SCORE_THRESHOLD = 868.0
-    SEARCH_PREFETCH_MULTIPLIER = 20  # Reducido de 50 para mejorar velocidad
+    SEARCH_PREFETCH_MULTIPLIER = 20
+
+    # --- ESTRATEGIA DE UMBRAL (configurable por GPU desde .env) ---
+    #
+    # El score absoluto de ColPali MaxSim varía por arquitectura GPU:
+    #   GTX 1070 (Pascal FP32): correcto ~878, falso ~846  → threshold 868 funciona
+    #   RTX 3050 (Ampere 4-bit): correcto ~804, falso ~?   → threshold debe calibrarse
+    #
+    # SEARCH_SCORE_THRESHOLD: umbral absoluto. Leído desde .env (SEARCH_SCORE_THRESHOLD).
+    #   - Si se define en .env, ese valor se usa (permite calibrar por GPU).
+    #   - Si es 0.0 (default): se usa top-k puro sin filtro absoluto.
+    #
+    # Con normalización L2 activa (NORMALIZE_EMBEDDINGS=True), después de re-indexar,
+    # los scores estarán en un rango más compacto y comparable entre GPUs.
+    SEARCH_SCORE_THRESHOLD = float(os.getenv("SEARCH_SCORE_THRESHOLD", "0.0"))
+    NORMALIZE_EMBEDDINGS = os.getenv("NORMALIZE_EMBEDDINGS", "true").lower() == "true"
+    TOP_K_RESULTS = int(os.getenv("TOP_K_RESULTS", "5"))
+
+    # Cuantización: 8 = mejor precisión en scores (~870+), 4 = menos VRAM (~800 scores)
+    QUANTIZATION_BITS = int(os.getenv("QUANTIZATION_BITS", "8"))
 
     @classmethod
     def setup_directories(cls):
@@ -286,26 +304,65 @@ class ProcesadorColPaliPuro:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
         # SOLO ColPali - para texto E imágenes
-        print("   📚 Cargando ColPali v1.2 (texto + imágenes)...")
+        bits = Config.QUANTIZATION_BITS
+        print(f"   📚 Cargando ColPali v1.2 ({bits}-bit, texto + imágenes)...")
         try:
             from transformers import BitsAndBytesConfig
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_compute_dtype=torch.bfloat16,
-                bnb_4bit_quant_type="nf4"
-            )
+
+            # Limpiar VRAM antes de cargar para maximizar espacio disponible
+            cleanup_memory()
+
+            if bits == 4:
+                quantization_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_quant_type="nf4"
+                )
+            else:
+                quantization_config = BitsAndBytesConfig(
+                    load_in_8bit=True,
+                )
             self.colpali_model = ColPaliModel.from_pretrained(
                 "vidore/colpali-v1.2",
                 quantization_config=quantization_config,
-                device_map=self.device
+                device_map="auto",           # auto-split GPU/CPU si no cabe
+                low_cpu_mem_usage=True,       # carga eficiente de shards
             )
             self.colpali_processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.2")
             self.colpali_model.eval()
-            print(f"   ✅ ColPali cargado ({Config.COLPALI_EMBEDDING_DIM}D multi-vector)")
+            print(f"   ✅ ColPali cargado ({bits}-bit, {Config.COLPALI_EMBEDDING_DIM}D multi-vector)")
         except Exception as e:
-            print(f"   ⚠️ Error cargando ColPali: {e}")
-            self.colpali_model = None
-            self.colpali_processor = None
+            if bits == 8:
+                print(f"   ⚠️ Error con 8-bit, intentando fallback a 4-bit: {e}")
+                try:
+                    # Liberar la carga parcial del intento 8-bit
+                    if hasattr(self, 'colpali_model') and self.colpali_model is not None:
+                        del self.colpali_model
+                        self.colpali_model = None
+                    cleanup_memory()
+
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_quant_type="nf4"
+                    )
+                    self.colpali_model = ColPaliModel.from_pretrained(
+                        "vidore/colpali-v1.2",
+                        quantization_config=quantization_config,
+                        device_map="auto",
+                        low_cpu_mem_usage=True,
+                    )
+                    self.colpali_processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.2")
+                    self.colpali_model.eval()
+                    print(f"   ✅ ColPali cargado (4-bit fallback, {Config.COLPALI_EMBEDDING_DIM}D multi-vector)")
+                except Exception as e2:
+                    print(f"   ❌ Error cargando ColPali: {e2}")
+                    self.colpali_model = None
+                    self.colpali_processor = None
+            else:
+                print(f"   ❌ Error cargando ColPali: {e}")
+                self.colpali_model = None
+                self.colpali_processor = None
 
         # MUVERA configuration
         print("   🚀 Inicializando MUVERA...")
@@ -373,7 +430,8 @@ class ProcesadorColPaliPuro:
                                     if img_pil.mode != "RGB":
                                         img_pil = img_pil.convert("RGB")
                                     
-                                    # Agrandar la imagen usando el coeficiente solicitado (868)
+                                    # Magnificar imágenes pequeñas a mínimo 868px
+                                    # para que ColPali genere embeddings de alta calidad
                                     target_size = 868
                                     if max(width, height) < target_size:
                                         scale = target_size / max(width, height)
@@ -491,6 +549,16 @@ class ProcesadorColPaliPuro:
         """Preprocesamiento específico para histopatología"""
         image = Image.open(imagen_path).convert("RGB")
 
+        # Magnificar imágenes pequeñas a mínimo 868px (mismo tratamiento
+        # que la extracción del PDF para mantener simetría en embeddings)
+        width, height = image.size
+        target_size = 868
+        if max(width, height) < target_size:
+            scale = target_size / max(width, height)
+            new_width = int(width * scale)
+            new_height = int(height * scale)
+            image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
         if Config.ENHANCE_CONTRAST:
             enhancer = ImageEnhance.Contrast(image)
             image = enhancer.enhance(Config.CONTRAST_FACTOR)
@@ -518,12 +586,23 @@ class ProcesadorColPaliPuro:
             with torch.no_grad():
                 image_embeddings = self.colpali_model(**batch_images)
 
-            # Multi-vector output (late interaction)
+            # Multi-vector output (convertir tensor a numpy)
             multivector = image_embeddings[0].cpu().float().numpy()
 
-            del image, batch_images, image_embeddings
-            # cleanup_memory()  <-- Removido por lentitud excesiva
+            # Normalización L2 por vector
+            # Convierte dot product (magnitud variable por GPU) en cosine similarity.
+            # Activa con NORMALIZE_EMBEDDINGS=true en .env (default: true).
+            if Config.NORMALIZE_EMBEDDINGS:
+                norms = np.linalg.norm(multivector, axis=-1, keepdims=True)
+                norms = np.where(norms < 1e-8, 1.0, norms)
+                multivector = multivector / norms
 
+            # Debug: score máximo esperado si query == document (útil para calibrar threshold)
+            print(f"   📊 [Debug] Embedding imagen: shape={multivector.shape} "
+                  f"| norm_media={np.linalg.norm(multivector, axis=-1).mean():.4f} "
+                  f"| normalizado={Config.NORMALIZE_EMBEDDINGS}")
+
+            del image, batch_images, image_embeddings
             return multivector
 
         except Exception as e:
@@ -548,10 +627,14 @@ class ProcesadorColPaliPuro:
             
             # Multi-vector output
             multivector = text_embeddings[0].cpu().float().numpy()
-            
+
+            # Normalización L2 (mismo tratamiento que embeddings de imagen)
+            if Config.NORMALIZE_EMBEDDINGS:
+                norms = np.linalg.norm(multivector, axis=-1, keepdims=True)
+                norms = np.where(norms < 1e-8, 1.0, norms)
+                multivector = multivector / norms
+
             del batch_queries, text_embeddings
-            # cleanup_memory()  <-- Removido por lentitud excesiva
-            
             return multivector
 
         except Exception as e:
@@ -719,39 +802,57 @@ class GestorQdrantMuvera:
                 limit=top_k * 2  # Traemos un poco más para filtrar después
             )
 
-            resultados = []
-            descartados = 0
-            print(f"   🕵️ Reranking {len(mv_response.points)} candidatos (Threshold: {min_score})...")
+            # Filtrar y rankear candidatos
+            todos_candidatos = []
             for r in mv_response.points:
                 score = float(r.score)
-                # Si estamos buscando específicamente una figura y esta la tiene, la guardamos sin importar el score
                 tiene_figura_exacta = False
-                if figuras_filtro and "figuras" in r.payload:
+                if figuras_filtro and r.payload and "figuras" in r.payload:
                     if any(f in r.payload["figuras"] for f in figuras_filtro):
                         tiene_figura_exacta = True
-                        
-                if score >= min_score or tiene_figura_exacta:
+                todos_candidatos.append({
+                    "id": r.id,
+                    "score": score,
+                    "payload": r.payload or {},
+                    "tiene_figura_exacta": tiene_figura_exacta
+                })
+
+            if not todos_candidatos:
+                return [], False
+
+            todos_candidatos.sort(key=lambda x: x['score'], reverse=True)
+            mejor_score = todos_candidatos[0]['score']
+
+            umbral = Config.SEARCH_SCORE_THRESHOLD if Config.SEARCH_SCORE_THRESHOLD > 0.0 else min_score
+
+            print(f"   🕵️ Reranking {len(todos_candidatos)} candidatos | "
+                  f"top-1={mejor_score:.4f} | umbral={umbral:.4f} "
+                  f"({'absoluto .env' if Config.SEARCH_SCORE_THRESHOLD > 0 else 'top-k puro'})")
+
+            resultados = []
+            descartados = 0
+            for c in todos_candidatos:
+                if c['score'] >= umbral or c['tiene_figura_exacta']:
                     resultados.append({
-                        "id": r.id,
-                        "score": score,
-                        "payload": r.payload
+                        "id": c['id'],
+                        "score": c['score'],
+                        "payload": c['payload']
                     })
                 else:
                     descartados += 1
+                    payload = c['payload']
+                    print(f"      ❌ RECHAZADO: score={c['score']:.4f} "
+                          f"| tipo={payload.get('tipo','?')} "
+                          f"| pág={payload.get('numero_pagina','?')}")
 
             if descartados > 0:
-                print(f"      🗑️ {descartados} candidatos descartados (score < {min_score})")
+                print(f"      🗑️ {descartados} candidatos rechazados (score < {umbral:.4f})")
 
-            # Ordenamos por score descendente por si acaso (aunque Qdrant ya los trae ordenados)
-            resultados.sort(key=lambda x: x['score'], reverse=True)
-            
-            # Limitar a top_k *después* de filtrar
             resultados = resultados[:top_k]
-            
-            # Si NO hay resultados válidos después de filtrar, entonces consideramos "has_rejected" = True
+
             if not resultados:
-                has_rejected = True
-                
+                has_rejected = umbral > 0.0  # Solo "rejected" si había un umbral activo
+
             return resultados, has_rejected
 
         except Exception as e:
@@ -1036,6 +1137,54 @@ class SistemaRAGColPaliPuro:
         state["trayectoria"].append({"nodo": "optimizar_consulta", "timestamp": time.time()})
         return state
 
+    def _calcular_dhash(self, image_path: str, hash_size: int = 16) -> Optional[np.ndarray]:
+        """
+        Calcula el Difference Hash (dHash) de una imagen.
+        
+        dHash es robusto a cambios de resolución, compresión JPEG,
+        ajustes de brillo/contraste y re-encoding.
+        Compara píxeles adyacentes horizontalmente → patrón de gradientes.
+        
+        Args:
+            image_path: ruta a la imagen
+            hash_size: tamaño del hash (hash_size x hash_size bits)
+        Returns:
+            np.ndarray de bools (hash_size * hash_size bits) o None si falla
+        """
+        try:
+            img = Image.open(image_path).convert("L")  # Escala de grises
+            # Redimensionar a (hash_size+1, hash_size) para comparar adyacentes
+            img = img.resize((hash_size + 1, hash_size), Image.Resampling.LANCZOS)
+            pixels = np.array(img, dtype=np.float32)
+            # dHash: pixel[x] > pixel[x+1] para cada fila
+            return (pixels[:, 1:] > pixels[:, :-1]).flatten()
+        except Exception as e:
+            print(f"   ⚠️ Error calculando dHash: {e}")
+            return None
+
+    def _verificar_match_visual(self, query_path: str, match_path: str) -> float:
+        """
+        Compara dos imágenes usando dHash (perceptual hash).
+        
+        Resultados típicos:
+            Misma imagen (diferente compresión/resolución): >0.90
+            Imágenes H&E diferentes: ~0.45-0.55
+            Imágenes completamente distintas: <0.40
+        
+        Returns:
+            float: Similitud entre 0.0 y 1.0
+        """
+        hash1 = self._calcular_dhash(query_path)
+        hash2 = self._calcular_dhash(match_path)
+        
+        if hash1 is None or hash2 is None:
+            return 1.0  # Asumir match si falla
+        
+        # Similitud = 1 - (distancia Hamming normalizada)
+        hamming_distance = np.sum(hash1 != hash2)
+        similarity = 1.0 - (hamming_distance / len(hash1))
+        return float(similarity)
+
     async def _nodo_buscar(self, state: AgentState) -> AgentState:
         resultados = []
         has_rejected = False
@@ -1081,6 +1230,55 @@ class SistemaRAGColPaliPuro:
                     resultados_filtrados.append(r)
             resultados = resultados_filtrados
             
+            # ── VERIFICACIÓN POR EMBEDDINGS ──
+            # Antes de responder, comparamos la imagen del upload con la devuelta
+            # usando MaxSim directo (mismo modelo) con este umbral de verificación.
+            # Esto corrige puntuaciones antiguas del índice.
+            UMBRAL_VERIFICACION = float(os.getenv("VERIFICATION_THRESHOLD", "830"))
+            if (state.get('imagen_consulta')
+                and os.path.exists(state['imagen_consulta'])
+                and query_mv is not None):
+                
+                top_image = None
+                for r in resultados:
+                    if r.get('payload', {}).get('tipo') == 'imagen':
+                        top_image = r
+                        break
+                
+                if top_image:
+                    match_path = top_image['payload'].get('imagen_path', '')
+                    if match_path and os.path.exists(match_path):
+                        match_mv = self.procesador.generar_embedding_imagen(match_path)
+                        
+                        if match_mv is not None:
+                            sim_matrix = np.dot(query_mv, match_mv.T)
+                            maxsim_directo = float(np.sum(np.max(sim_matrix, axis=1)))
+                            
+                            match_name = os.path.basename(match_path)
+                            qdrant_score = top_image.get('score', 0.0)
+                            
+                            print(f"\n   🔬 VERIFICACIÓN EMBEDDINGS: query vs {match_name}")
+                            print(f"      MaxSim directo (mismo modelo): {maxsim_directo:.2f}")
+                            print(f"      Score Qdrant (índice):         {qdrant_score:.2f}")
+                            print(f"      Umbral verificación:           {UMBRAL_VERIFICACION:.2f}")
+                            
+                            if maxsim_directo < UMBRAL_VERIFICACION:
+                                print(f"      ❌ Tejido NO coincide semánticamente → score bajo")
+                                has_rejected = True
+                                resultados = [r for r in resultados if r.get('payload', {}).get('tipo') != 'imagen']
+                            else:
+                                print(f"      ✅ Tejido coincide semánticamente. Ejecutando Verificación Visual estricta...")
+                                # Check 2: Verificación visual estricta (dHash) para descartar falsos positivos
+                                dhash_sim = self._verificar_match_visual(state['imagen_consulta'], match_path)
+                                print(f"         Similitud visual (dHash): {dhash_sim:.4f} (umbral: 0.70)")
+                                
+                                if dhash_sim < 0.70:
+                                    print(f"         ❌ RECHAZADO: Falso positivo de ColPali. Visualmente son tinturas/imágenes distintas.")
+                                    has_rejected = True
+                                    resultados = [r for r in resultados if r.get('payload', {}).get('tipo') != 'imagen']
+                                else:
+                                    print(f"         ✅ Match visual confirmado")
+
             print(f"\n📄 Resultados recuperados ({len(resultados)}):")
             for i, res in enumerate(resultados):
                 payload = res.get('payload', {})

@@ -73,7 +73,8 @@ async def startup_event():
                 print("⚠️ Colección no encontrada o error. Iniciando indexación automática...")
                 await asistente.procesar_y_almacenar_pdfs_multimodal(pdfs, use_muvera=True)
     except Exception as e:
-        print(f"❌ Error en auto-indexación: {e}")
+        import traceback
+        print(f"❌ Error en auto-indexación:\n{traceback.format_exc()}")
 
 @app.get("/health")
 def health():
@@ -191,10 +192,26 @@ async def upload_image(file: UploadFile = File(...)):
 async def reindex_pdfs():
     """
     Reindexa los PDFs en la carpeta ./pdfs
+    IMPORTANTE: Borra las colecciones existentes para que los nuevos embeddings
+    (con normalización L2) sean consistentes. Sin esto, se mezclarían vectores
+    viejos (sin normalizar) con nuevos, produciendo scores incónsistentes.
     """
     try:
         print("\n🔄 Reindexando PDFs...")
-        # Buscar PDFs en el directorio local ./pdfs/
+        
+        # 1. Borrar colecciones existentes para evitar mezcla de vectores
+        client = asistente.gestor_qdrant.client
+        for col in [
+            asistente.gestor_qdrant.content_mv_collection,
+            asistente.gestor_qdrant.content_fde_collection,
+        ]:
+            try:
+                await client.delete_collection(col)
+                print(f"   ✅ Colección borrada: {col}")
+            except Exception:
+                print(f"   ⚠️ No existía: {col}")
+        
+        # 2. Buscar PDFs en el directorio local ./pdfs/
         pdf_dir = Path("./pdfs")
         if pdf_dir.exists():
             archivos_existentes = list(pdf_dir.glob("*.pdf"))
@@ -206,10 +223,11 @@ async def reindex_pdfs():
                 archivos_existentes,
                 use_muvera=True
             )
-            return {"status": "success", "message": f"Procesados {len(archivos_existentes)} archivos"}
+            return {"status": "success", "message": f"Procesados {len(archivos_existentes)} archivos con embeddings normalizados"}
         return {"status": "warning", "message": "No se encontraron PDFs"}
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        import traceback
+        return {"status": "error", "message": str(e), "detail": traceback.format_exc()}
 
 if __name__ == "__main__":
     # Crear carpeta uploads si no existe
