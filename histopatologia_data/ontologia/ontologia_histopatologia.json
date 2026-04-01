@@ -1,114 +1,97 @@
 {
   "sistemas_anatomicos": [
-    "Sistema cardiovascular",
-    "Sistema digestivo",
-    "Sistema endocrino",
-    "Sistema inmunológico/Linfático",
-    "Sistema integumentario (Piel)",
-    "Sistema muscular",
-    "Sistema nervioso",
-    "Sistema óseo/articular",
-    "Sistema reproductor femenino",
-    "Sistema reproductor masculino",
-    "Sistema respiratorio",
-    "Sistema urinario"
-  ],
-  "tejidos_basicos": [
-    "Tejido epitelial",
-    "Tejido conectivo (conjuntivo)",
-    "Tejido muscular",
-    "Tejido nervioso"
+    "Tejido conectivo especializado",
+    "Cartílago",
+    "Hueso",
+    "Pericondrio",
+    "Periostio",
+    "Endostio",
+    "Tráquea",
+    "Laringe",
+    "Piel de oreja de ratón",
+    "Hueso fracturado",
+    "Pie de feto"
   ],
   "terminologia_histologica": [
-    "adipocito",
-    "axón",
-    "capilar",
-    "cartílago hialino",
-    "cartílago elástico",
-    "cartílago fibroso",
-    "célula caliciforme",
-    "célula epitelial",
-    "célula muscular lisa",
-    "célula muscular estriada",
-    "célula muscular cardíaca",
-    "citoplasma",
-    "condroblasto",
-    "condrocito",
-    "endotelio",
-    "eritrocito",
-    "epitelio escamoso estratificado",
-    "epitelio pseudoestratificado",
-    "epitelio simple cúbico",
-    "epitelio simple cilíndrico",
-    "fibroblasto",
-    "fibra colágena",
-    "fibra elástica",
-    "fibra reticular",
-    "leucocito",
-    "linfocito",
-    "macrófago",
-    "matriz extracelular",
-    "membrana basal",
-    "neurona",
-    "núcleo",
-    "osteoblasto",
-    "osteocito",
-    "osteoclasto",
-    "pericondrio",
-    "periostio"
-  ],
-  "estructuras_microscopicas": [
-    "alvéolo",
-    "bronquiolo",
-    "cápsula",
-    "conducto",
-    "corpúsculo renal",
-    "ducto excretor",
-    "folículo",
-    "glándula acinar",
-    "glándula tubular",
-    "glándula sebácea",
-    "glomérulo",
-    "islote de Langerhans",
-    "luz (lumen)",
-    "mucosa",
-    "submucosa",
-    "trabécula",
-    "vello intestinal",
-    "vaso sanguíneo"
+    "Pericondrio",
+    "Cartílago hialino",
+    "Cartílago elástico",
+    "Cartílago fibroso",
+    "Osteona",
+    "Endostio",
+    "Periostio",
+    "Osteoblastos",
+    "Osteocitos",
+    "Osteoclastos",
+    "Hueso compacto",
+    "Hueso esponjoso",
+    "Conducto de Havers",
+    "Conducto de Volckmann"
   ],
   "tecnicas_y_tinciones": [
-    "Hematoxilina y Eosina (H&E)",
-    "PAS (Ácido Peryódico de Schiff)",
-    "Tricrómico de Masson",
-    "Reticulina (Plata)",
-    "Azul de Toluidina",
-    "Giemsa",
-    "Impregnación argéntica",
-    "Tinta china",
-    "Inmunohistoquímica (IHC)"
+    "H.E. (Hematoxilina y Eosina)",
+    "Microscopía óptica"
   ],
-  "patologias_y_alteraciones": [
-    "adenoma",
-    "apoptosis",
-    "carcinoma",
-    "displasia",
-    "edema",
-    "fibrosis",
-    "hiperplasia",
-    "hipertrofia",
-    "inflamación aguda",
-    "inflamación crónica",
-    "isquemia",
-    "metaplasia",
-    "necrosis",
-    "neoplasia benigna",
-    "neoplasia maligna",
-    "sarcoma"
+  "figuras": [
+    {
+      "numero": 11.1,
+      "descripcion": "Tejido Conectivo Especializado, Cartílago Hialino"
+    },
+    {
+      "numero": 11.2,
+      "descripcion": "Tejido Conectivo Especializado, Cartílago Hialino"
+    },
+    {
+      "numero": 11.3,
+      "descripcion": "Tejido Conectivo Especializado, Cartílago Elástico"
+    },
+    {
+      "numero": 11.4,
+      "descripcion": "Tejido Conectivo Especializado, Cartílago Hialino del Disco de Crecimiento"
+    },
+    {
+      "numero": 11.5,
+      "descripcion": "Tejido Conectivo Especializado, Cartílago Fibroso"
+    },
+    {
+      "numero": 11.6,
+      "descripcion": "Tejido Conectivo Especializado, Cartílago embrionario"
+    },
+    {
+      "numero": 12.1,
+      "descripcion": "Tejido Conectivo Especializado, Óseo"
+    },
+    {
+      "numero": 12.2,
+      "descripcion": "Tejido Conectivo Especializado, Óseo"
+    },
+    {
+      "numero": 12.3,
+      "descripcion": "Tejido Conectivo Especializado, Óseo"
+    },
+    {
+      "numero": 12.4,
+      "descripcion": "Tejido Conectivo Especializado, Óseo"
+    },
+    {
+      "numero": 12.5,
+      "descripcion": "Hueso compacto, hueso óseo"
+    },
+    {
+      "numero": 12.6,
+      "descripcion": "Hueso compacto"
+    },
+    {
+      "numero": 12.7,
+      "descripcion": "Hueso compacto"
+    }
+  ],
+  "patologias": [
+    "Hueso fracturado"
   ],
   "metadata": {
-    "tipo": "estandar_histopatologia",
-    "fuente": "Generada basada en estándares HPATH/SNOMED CT core concepts",
-    "fecha": "2026-03-15"
+    "fecha": "2026-03-31 22:41:59",
+    "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
+    "num_imagenes": 34
   }
 }

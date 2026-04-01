@@ -373,6 +373,16 @@ class ProcesadorColPaliPuro:
                                     if img_pil.mode != "RGB":
                                         img_pil = img_pil.convert("RGB")
                                     
+                                    # Agrandar la imagen usando el coeficiente solicitado (868)
+                                    target_size = 868
+                                    if max(width, height) < target_size:
+                                        scale = target_size / max(width, height)
+                                        new_width = int(width * scale)
+                                        new_height = int(height * scale)
+                                        img_pil = img_pil.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                                        width, height = img_pil.size
+                                        area = width * height
+                                    
                                     img_path_rgb = Config.EMBEDDINGS_DIR / f"{nombre_base}_p{page_num+1}_img{image_count}.jpg"
                                     img_pil.save(img_path_rgb, "JPEG")
                                     
