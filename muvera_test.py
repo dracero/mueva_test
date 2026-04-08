@@ -1234,7 +1234,13 @@ class SistemaRAGColPaliPuro:
             # Antes de responder, comparamos la imagen del upload con la devuelta
             # usando MaxSim directo (mismo modelo) con este umbral de verificación.
             # Esto corrige puntuaciones antiguas del índice.
-            UMBRAL_VERIFICACION = float(os.getenv("VERIFICATION_THRESHOLD", "830"))
+            try:
+                UMBRAL_VERIFICACION = float(os.getenv("VERIFICATION_THRESHOLD", "830"))
+            except (ValueError, TypeError):
+                print("⚠️ VERIFICATION_THRESHOLD inválido, usando default 830")
+                UMBRAL_VERIFICACION = 830.0
+            
+            HIGH_CONFIDENCE_THRESHOLD = 890.0
             if (state.get('imagen_consulta')
                 and os.path.exists(state['imagen_consulta'])
                 and query_mv is not None):
@@ -1263,11 +1269,16 @@ class SistemaRAGColPaliPuro:
                             print(f"      Umbral verificación:           {UMBRAL_VERIFICACION:.2f}")
                             
                             if maxsim_directo < UMBRAL_VERIFICACION:
-                                print(f"      ❌ Tejido NO coincide semánticamente → score bajo")
+                                # Nivel 1: Rechazar sin dHash - score demasiado bajo
+                                print(f"      ❌ Tejido NO coincide semánticamente → score bajo (score: {maxsim_directo:.2f})")
                                 has_rejected = True
                                 resultados = [r for r in resultados if r.get('payload', {}).get('tipo') != 'imagen']
+                            elif maxsim_directo >= HIGH_CONFIDENCE_THRESHOLD:
+                                # Nivel 2: Aceptar sin dHash - alta confianza
+                                print(f"      ✅ Match confirmado con alta confianza (score: {maxsim_directo:.2f} >= {HIGH_CONFIDENCE_THRESHOLD}), verificación visual omitida")
                             else:
-                                print(f"      ✅ Tejido coincide semánticamente. Ejecutando Verificación Visual estricta...")
+                                # Nivel 3: Ejecutar dHash - confianza media (830 <= score < 890)
+                                print(f"      ✅ Tejido coincide semánticamente (score: {maxsim_directo:.2f}). Ejecutando Verificación Visual estricta...")
                                 # Check 2: Verificación visual estricta (dHash) para descartar falsos positivos
                                 dhash_sim = self._verificar_match_visual(state['imagen_consulta'], match_path)
                                 print(f"         Similitud visual (dHash): {dhash_sim:.4f} (umbral: 0.70)")
