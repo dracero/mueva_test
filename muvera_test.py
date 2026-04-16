@@ -1356,60 +1356,156 @@ class SistemaRAGColPaliPuro:
         state["trayectoria"].append({"nodo": "reset", "timestamp": time.time()})
         return state
 
-    async def _nodo_generar_respuesta(self, state: AgentState) -> AgentState:
-        """Nodo 6: Generar respuesta basada EXCLUSIVAMENTE en contexto recuperado"""
-        print("\n💭 Generando respuesta basada en contexto recuperado...")
-
-        # Construir información sobre imágenes
-        info_imagen = ""
-        if state.get('imagen_consulta'):
-            info_imagen = "\nNOTA: El usuario proporcionó una imagen para análisis. Las imágenes recuperadas de la base de datos son las MEJORES COINCIDENCIAS encontradas para esa imagen."
-        if state["imagenes_relevantes"]:
-            info_imagen += f"\nSe encontraron {len(state['imagenes_relevantes'])} imágenes coincidentes en la base de datos. DEBES describir estas imágenes usando el texto asociado."
-
-        # Cargar imágenes recuperadas
-        content_parts = []
+    def _detectar_tipo_consulta(self, state: AgentState) -> str:
+        """
+        Detecta el tipo de consulta basándose en el estado.
         
-        # 1. Instrucciones del sistema (modificadas para multimodal)
-        system_prompt = """Eres un profesor experto en histopatología. Tu función es responder usando la información textual Y VISUAL recuperada de la base de datos.
+        Args:
+            state: Estado actual del agente
+            
+        Returns:
+            'imagen' si hay contexto visual disponible, 'texto' en caso contrario
+        """
+        # Verificar si hay imagen de consulta válida
+        if state.get('imagen_consulta'):
+            if os.path.exists(state['imagen_consulta']):
+                return 'imagen'
+        
+        # Verificar si hay imágenes relevantes recuperadas
+        if state.get('imagenes_relevantes') and len(state['imagenes_relevantes']) > 0:
+            return 'imagen'
+        
+        # Por defecto, es una consulta de texto
+        return 'texto'
 
-REGLA FUNDAMENTAL SOBRE IMÁGENES RECUPERADAS:
-Las imágenes etiquetadas como [IMAGEN RECUPERADA] son el RESULTADO de una búsqueda por similitud en la base de datos. Estas imágenes YA PASARON un umbral de similitud alto y SON la mejor coincidencia encontrada. Por lo tanto:
-- DEBES describir y analizar las imágenes recuperadas usando el texto asociado que se proporciona en el contexto.
-- Si el usuario subió una imagen (etiquetada como [IMAGEN DE CONSULTA DEL USUARIO]), la imagen recuperada ES la coincidencia encontrada para esa consulta. Úsala como fuente de verdad.
-- NO rechaces una imagen recuperada diciendo que "no coincide" con la del usuario. El sistema de búsqueda ya validó la coincidencia.
-- Si una página contiene múltiples figuras (ej: Figura 11-2 y 11-3), DEBES analizar visualmente la imagen recuperada y compararla con las DESCRIPCIONES de cada figura en el texto asociado para determinar cuál es. NO asumas que es la primera figura de la lista. Identifica la figura correcta basándote en las características visuales (tipo de tejido, tinción, estructuras visibles) y las descripciones del texto.
-- Si el usuario preguntó por una figura específica, ENFÓCATE SOLO en esa figura y su descripción del texto asociado.
+    def _generar_prompt_sistema(self, tipo_consulta: str) -> str:
+        """
+        Genera el prompt del sistema adaptado al tipo de consulta.
+        
+        Args:
+            tipo_consulta: 'imagen' o 'texto'
+            
+        Returns:
+            String con el prompt del sistema
+        """
+        if tipo_consulta == 'texto':
+            # Prompt conversacional para consultas de solo texto
+            return """Eres un profesor experto en histopatología con un estilo amigable y educativo. 
+Tu función es ayudar a estudiantes a comprender conceptos de histopatología 
+respondiendo sus preguntas de forma clara y accesible.
 
 REGLAS DE PRECISIÓN:
-1. Responde basándote en el contexto proporcionado (imágenes recuperadas y fragmentos de texto).
-2. Puedes realizar deducciones lógicas apoyadas en el texto o imágenes del contexto, citando qué parte te permite deducirlo.
-3. Si NO se recuperó NINGUNA imagen ni texto relevante (contexto vacío), responde EXACTAMENTE: "No hay suficiente contexto o detalle en las fuentes proporcionadas para dar una respuesta precisa a tu consulta."
-4. NUNCA inventes información que no esté en el contexto.
-
-REGLAS SOBRE FIGURAS:
-1. Cada resultado indica qué figuras contiene esa página (campo "Figuras en esta página" o "Figuras mencionadas"). USA esta información.
-2. Si el usuario pregunta por una figura específica (ej: "Figura 14.3"), SOLO describe esa figura usando el texto asociado. NO describas las otras figuras de la misma página.
-3. Si la imagen recuperada contiene múltiples figuras en una sola imagen, identifica y describe SOLO la que el usuario solicitó.
+1. Responde basándote en el contexto textual proporcionado.
+2. Puedes realizar deducciones lógicas apoyadas en el texto del contexto, 
+   citando qué parte te permite deducirlo.
+3. Si el contexto es insuficiente, responde honestamente: 
+   "No tengo suficiente información en mis fuentes para responder eso con 
+   precisión. ¿Podrías reformular tu pregunta o darme más detalles sobre qué 
+   aspecto específico te interesa?"
+4. Nunca inventes información que no esté en el contexto.
+5. Usa un tono conversacional pero mantén el rigor científico.
 
 ESTRUCTURA DE RESPUESTA:
-1. **Imagen encontrada**: Indica qué imagen se recuperó de la base de datos y su figura correspondiente.
-2. **Análisis Visual**: Describe qué se observa en la imagen recuperada según el texto asociado.
+1. **Respuesta directa**: Responde la pregunta de forma clara y concisa.
+2. **Explicación**: Desarrolla los conceptos relevantes.
+3. **Evidencia**: Cita las fuentes del contexto que respaldan tu respuesta.
+4. **Contexto adicional** (opcional): Información relacionada que pueda ser útil."""
+        
+        else:  # tipo_consulta == 'imagen'
+            # Prompt conversacional para consultas con imagen
+            return """Eres un profesor experto en histopatología con un estilo amigable y educativo. 
+Tu función es ayudar a estudiantes a comprender conceptos de histopatología 
+analizando imágenes y respondiendo sus preguntas de forma clara y accesible.
+
+REGLA FUNDAMENTAL SOBRE IMÁGENES RECUPERADAS:
+Las imágenes etiquetadas como [IMAGEN RECUPERADA] son el RESULTADO de una 
+búsqueda por similitud en la base de datos. Estas imágenes YA PASARON un 
+umbral de similitud alto y SON la mejor coincidencia encontrada. Por lo tanto:
+- DEBES describir y analizar las imágenes recuperadas usando el texto asociado.
+- Si el usuario subió una imagen (etiquetada como [IMAGEN DE CONSULTA DEL USUARIO]), 
+  la imagen recuperada ES la coincidencia encontrada para esa consulta.
+- NO rechaces una imagen recuperada diciendo que "no coincide" con la del usuario.
+- Si una página contiene múltiples figuras, analiza visualmente la imagen 
+  recuperada y compárala con las DESCRIPCIONES de cada figura en el texto 
+  asociado para determinar cuál es.
+
+REGLAS DE PRECISIÓN:
+1. Responde basándote en el contexto proporcionado (imágenes recuperadas y 
+   fragmentos de texto).
+2. Puedes realizar deducciones lógicas apoyadas en el texto o imágenes del 
+   contexto, citando qué parte te permite deducirlo.
+3. Si el contexto es insuficiente, responde honestamente: 
+   "No tengo suficiente información en mis fuentes para responder eso con 
+   precisión. ¿Podrías reformular tu pregunta o darme más detalles sobre qué 
+   aspecto específico te interesa?"
+4. Nunca inventes información que no esté en el contexto.
+5. Usa un tono conversacional pero mantén el rigor científico.
+
+REGLAS SOBRE FIGURAS:
+1. Si el usuario pregunta por una figura específica (ej: "Figura 14.3"), 
+   SOLO describe esa figura usando el texto asociado.
+2. Si la imagen recuperada contiene múltiples figuras, identifica y describe 
+   SOLO la que el usuario solicitó.
+
+ESTRUCTURA DE RESPUESTA:
+1. **Imagen encontrada**: Indica qué imagen se recuperó y su figura correspondiente.
+2. **Análisis Visual**: Describe qué se observa en la imagen según el texto asociado.
 3. **Identificación**: Qué órgano/tejido/estructura se observa.
-4. **Evidencia**: Integra lo que se ve en la imagen con lo que dice el texto del contexto."""
+4. **Evidencia**: Integra lo que se ve en la imagen con lo que dice el texto."""
 
-        messages = [
-            SystemMessage(content=system_prompt)
-        ]
-
+    def _construir_mensaje_usuario(
+        self, 
+        state: AgentState, 
+        tipo_consulta: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Construye el contenido del mensaje de usuario adaptado al tipo de consulta.
+        
+        Args:
+            state: Estado actual del agente
+            tipo_consulta: 'imagen' o 'texto'
+            
+        Returns:
+            Lista de partes del mensaje (texto e imágenes)
+        """
+        # Construir historial de conversación si existe
+        historial = ""
         if state.get("contexto_memoria"):
             historial = f"\n========================================\nHISTORIAL DE CONVERSACIÓN RELEVANTE:\n{state['contexto_memoria']}\n========================================\n"
-        else:
-            historial = ""
+        
+        # Inicializar contenido del mensaje
+        user_content = []
+        
+        if tipo_consulta == 'texto':
+            # Mensaje para consultas de solo texto
+            texto_mensaje = f"""{historial}CONSULTA DEL USUARIO: {state["consulta_usuario"]}
 
-        # 2. Construir mensaje de usuario con texto e imágenes
-        user_content = [
-            {"type": "text", "text": f"""{historial}CONSULTA DEL USUARIO: {state["consulta_usuario"]}
+========================================
+CONTEXTO RECUPERADO DE LA BASE DE DATOS
+(Esta es la ÚNICA fuente de verdad para tu respuesta)
+========================================
+
+{state["contexto_documentos"][:10000]}
+
+========================================
+
+Responde basándote ÚNICAMENTE en el contexto de arriba."""
+            
+            user_content.append({
+                "type": "text",
+                "text": texto_mensaje
+            })
+        
+        else:  # tipo_consulta == 'imagen'
+            # Construir información sobre imágenes
+            info_imagen = ""
+            if state.get('imagen_consulta'):
+                info_imagen = "\nNOTA: El usuario proporcionó una imagen para análisis. Las imágenes recuperadas de la base de datos son las MEJORES COINCIDENCIAS encontradas para esa imagen."
+            if state["imagenes_relevantes"]:
+                info_imagen += f"\nSe encontraron {len(state['imagenes_relevantes'])} imágenes coincidentes en la base de datos. DEBES describir estas imágenes usando el texto asociado."
+            
+            # Mensaje para consultas con imagen
+            texto_mensaje = f"""{historial}CONSULTA DEL USUARIO: {state["consulta_usuario"]}
 {info_imagen}
 
 ========================================
@@ -1421,55 +1517,113 @@ CONTEXTO RECUPERADO DE LA BASE DE DATOS
 
 ========================================
 
-Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjuntas.
-"""}
-        ]
-
-        # Limitar número de imágenes por restricción de Groq (max 5)
-        max_imagenes_recuperadas = 4 if (state.get('imagen_consulta') and os.path.exists(state['imagen_consulta'])) else 5
-        imagenes_a_procesar = state["imagenes_relevantes"][:max_imagenes_recuperadas]
-        
-        if len(state["imagenes_relevantes"]) > max_imagenes_recuperadas:
-            print(f"   ⚠️ Limitando a {max_imagenes_recuperadas} imágenes (de {len(state['imagenes_relevantes'])}) por restricción de API.")
-
-        # Añadir imágenes recuperadas al mensaje
-        for i, img_path in enumerate(imagenes_a_procesar):
-            try:
-                if os.path.exists(img_path):
-                    with open(img_path, "rb") as image_file:
-                        image_data = base64.b64encode(image_file.read()).decode("utf-8")
-                    
+Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjuntas."""
+            
+            user_content.append({
+                "type": "text",
+                "text": texto_mensaje
+            })
+            
+            # Determinar límite de imágenes según restricción de API (max 5 total)
+            max_imagenes_recuperadas = 4 if (state.get('imagen_consulta') and os.path.exists(state['imagen_consulta'])) else 5
+            imagenes_a_procesar = state["imagenes_relevantes"][:max_imagenes_recuperadas]
+            
+            if len(state["imagenes_relevantes"]) > max_imagenes_recuperadas:
+                print(f"   ⚠️ Limitando a {max_imagenes_recuperadas} imágenes (de {len(state['imagenes_relevantes'])}) por restricción de API.")
+            
+            # Añadir imágenes recuperadas al mensaje
+            imagenes_cargadas_exitosamente = 0
+            for i, img_path in enumerate(imagenes_a_procesar):
+                try:
+                    if os.path.exists(img_path):
+                        with open(img_path, "rb") as image_file:
+                            image_data = base64.b64encode(image_file.read()).decode("utf-8")
+                        
+                        user_content.append({
+                            "type": "text", 
+                            "text": f"\n[IMAGEN RECUPERADA {i+1}: {os.path.basename(img_path)}]"
+                        })
+                        user_content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}
+                        })
+                        print(f"   🖼️ Adjuntando imagen al prompt: {os.path.basename(img_path)}")
+                        imagenes_cargadas_exitosamente += 1
+                    else:
+                        print(f"   ⚠️ Imagen no existe: {img_path}")
+                except Exception as e:
+                    print(f"   ⚠️ Error cargando imagen {img_path}: {e}")
+            
+            # Si el usuario subió una imagen, también la adjuntamos
+            if state.get('imagen_consulta') and os.path.exists(state['imagen_consulta']):
+                try:
+                    with open(state['imagen_consulta'], "rb") as image_file:
+                        query_image_data = base64.b64encode(image_file.read()).decode("utf-8")
                     user_content.append({
-                        "type": "text", 
-                        "text": f"\n[IMAGEN RECUPERADA {i+1}: {os.path.basename(img_path)}]"
+                        "type": "text",
+                        "text": "\n[IMAGEN DE CONSULTA DEL USUARIO]"
                     })
                     user_content.append({
                         "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}
+                        "image_url": {"url": f"data:image/jpeg;base64,{query_image_data}"}
                     })
-                    print(f"   🖼️ Adjuntando imagen al prompt: {os.path.basename(img_path)}")
-            except Exception as e:
-                print(f"   ⚠️ Error cargando imagen {img_path}: {e}")
+                    print(f"   🖼️ Adjuntando imagen de consulta del usuario")
+                    imagenes_cargadas_exitosamente += 1
+                except Exception as e:
+                    print(f"   ⚠️ Error cargando imagen de consulta: {e}")
+            
+            # Si todas las imágenes fallaron, tratar como consulta de texto
+            if imagenes_cargadas_exitosamente == 0:
+                print(f"   ⚠️ Todas las imágenes fallaron al cargar. Tratando como consulta de texto.")
+                # Reconstruir mensaje como consulta de texto
+                user_content = []
+                texto_mensaje = f"""{historial}CONSULTA DEL USUARIO: {state["consulta_usuario"]}
 
-        # Si el usuario subió una imagen, también la adjuntamos
-        if state.get('imagen_consulta') and os.path.exists(state['imagen_consulta']):
-            try:
-                with open(state['imagen_consulta'], "rb") as image_file:
-                    query_image_data = base64.b64encode(image_file.read()).decode("utf-8")
+========================================
+CONTEXTO RECUPERADO DE LA BASE DE DATOS
+(Esta es la ÚNICA fuente de verdad para tu respuesta)
+========================================
+
+{state["contexto_documentos"][:10000]}
+
+========================================
+
+Responde basándote ÚNICAMENTE en el contexto de arriba."""
+                
                 user_content.append({
                     "type": "text",
-                    "text": "\n[IMAGEN DE CONSULTA DEL USUARIO]"
+                    "text": texto_mensaje
                 })
-                user_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{query_image_data}"}
-                })
-            except Exception as e:
-                print(f"   ⚠️ Error cargando imagen de consulta: {e}")
+        
+        return user_content
 
-        messages.append(HumanMessage(content=user_content))
+    async def _nodo_generar_respuesta(self, state: AgentState) -> AgentState:
+        """Nodo 6: Generar respuesta basada EXCLUSIVAMENTE en contexto recuperado"""
+        print("\n💭 Generando respuesta basada en contexto recuperado...")
 
+        # 1. Detectar tipo de consulta
+        tipo_consulta = self._detectar_tipo_consulta(state)
+        print(f"   📝 Tipo de consulta detectado: {tipo_consulta}")
 
+        # 2. Validar contexto insuficiente (Requirement 5.1, 5.3)
+        contexto = state.get("contexto_documentos", "")
+        if len(contexto.strip()) < 50:
+            print("   ⚠️ Contexto insuficiente detectado (<50 caracteres)")
+            # El prompt ya guía al LLM a responder apropiadamente con mensaje amigable
+
+        # 3. Generar prompt del sistema adaptado
+        system_prompt = self._generar_prompt_sistema(tipo_consulta)
+
+        # 4. Construir mensaje de usuario con contenido adaptado
+        user_content = self._construir_mensaje_usuario(state, tipo_consulta)
+
+        # 5. Crear mensajes para el LLM
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_content)
+        ]
+
+        # 6. Invocar LLM y generar respuesta
         response = await self.llm.ainvoke(messages)
         state["respuesta_final"] = response.content
 

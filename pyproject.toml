@@ -42,6 +42,7 @@ dev = [
 [dependency-groups]
 dev = [
     "ipython>=8.0.0",
+    "pytest>=9.0.3",
 ]
 
 # Configure uv to use PyTorch CUDA index for GPU acceleration
