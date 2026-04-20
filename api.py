@@ -166,6 +166,22 @@ async def chat_endpoint(request: ChatRequest):
         print(f"🖼️ Usando imagen Base64 para contexto")
     
     response_text = await chat_handler(last_message, image_path, image_base64)
+    
+    # Limpiar cualquier imagen en 'uploads' (ya sea subida vía /upload-image o guardada 
+    # desde base64) para que no sea reutilizada accidentalmente en los turnos posteriores.
+    try:
+        archive_dir = "uploads_archived"
+        os.makedirs(archive_dir, exist_ok=True)
+        uploads_dir = "uploads"
+        if os.path.exists(uploads_dir):
+            for filename in os.listdir(uploads_dir):
+                file_path = os.path.join(uploads_dir, filename)
+                if os.path.isfile(file_path):
+                    shutil.move(file_path, os.path.join(archive_dir, filename))
+            print(f"🧹 Carpeta uploads limpiada. Archivos movidos a {archive_dir}.")
+    except Exception as e:
+        print(f"⚠️ Error archivando imágenes: {e}")
+            
     return {"response": response_text}
 
 # Intento de uso estándar de CopilotKit si es posible envolver

@@ -43,13 +43,13 @@ def test_detectar_tipo_consulta_con_imagen_usuario_valida(sistema, temp_image):
 
 
 def test_detectar_tipo_consulta_con_imagenes_recuperadas(sistema):
-    """Debe detectar 'imagen' cuando hay imagenes_relevantes"""
+    """Debe detectar 'texto' cuando solo hay imagenes_relevantes (sin imagen_consulta del usuario)"""
     state = {
         'imagen_consulta': None,
         'imagenes_relevantes': ['/path/to/retrieved.jpg']
     }
     resultado = sistema._detectar_tipo_consulta(state)
-    assert resultado == 'imagen', "Debe detectar 'imagen' cuando hay imagenes_relevantes"
+    assert resultado == 'texto', "Debe detectar 'texto' cuando no hay imagen_consulta del usuario, independientemente de imagenes_relevantes"
 
 
 def test_detectar_tipo_consulta_solo_texto(sistema):

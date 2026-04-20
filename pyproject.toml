@@ -41,6 +41,7 @@ dev = [
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.152.1",
     "ipython>=8.0.0",
     "pytest>=9.0.3",
 ]

@@ -23,20 +23,34 @@ def test_integracion_detectar_y_generar_prompt():
     
     print("✅ Test integración: consulta de texto funciona correctamente")
     
-    # Test 2: Consulta con imagen
-    state_imagen = {
-        'imagen_consulta': None,
-        'imagenes_relevantes': ['imagen1.jpg', 'imagen2.jpg']
-    }
+    # Test 2: Consulta con imagen del usuario
+    import tempfile
+    import os
     
-    tipo = sistema._detectar_tipo_consulta(state_imagen)
-    assert tipo == 'imagen', f"Esperaba 'imagen', obtuvo '{tipo}'"
+    # Crear un archivo temporal para simular una imagen del usuario
+    with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+        temp_file.write(b'fake image data')
+        temp_image_path = temp_file.name
     
-    prompt = sistema._generar_prompt_sistema(tipo)
-    assert len(prompt) > 0, "El prompt no debe estar vacío"
-    assert 'imagen recuperada' in prompt.lower(), "Prompt de imagen debe mencionar imágenes recuperadas"
+    try:
+        state_imagen = {
+            'imagen_consulta': temp_image_path,  # Imagen del usuario
+            'imagenes_relevantes': ['imagen1.jpg', 'imagen2.jpg']
+        }
+        
+        tipo = sistema._detectar_tipo_consulta(state_imagen)
+        assert tipo == 'imagen', f"Esperaba 'imagen', obtuvo '{tipo}'"
+        
+        prompt = sistema._generar_prompt_sistema(tipo)
+        assert len(prompt) > 0, "El prompt no debe estar vacío"
+        assert 'imagen recuperada' in prompt.lower(), "Prompt de imagen debe mencionar imágenes recuperadas"
+        
+        print("✅ Test integración: consulta con imagen funciona correctamente")
     
-    print("✅ Test integración: consulta con imagen funciona correctamente")
+    finally:
+        # Limpiar archivo temporal
+        if os.path.exists(temp_image_path):
+            os.unlink(temp_image_path)
 
 
 def test_prompts_diferentes_segun_tipo():

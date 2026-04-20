@@ -823,11 +823,11 @@ class GestorQdrantMuvera:
             todos_candidatos.sort(key=lambda x: x['score'], reverse=True)
             mejor_score = todos_candidatos[0]['score']
 
-            umbral = Config.SEARCH_SCORE_THRESHOLD if Config.SEARCH_SCORE_THRESHOLD > 0.0 else min_score
+            umbral = min_score
 
             print(f"   🕵️ Reranking {len(todos_candidatos)} candidatos | "
                   f"top-1={mejor_score:.4f} | umbral={umbral:.4f} "
-                  f"({'absoluto .env' if Config.SEARCH_SCORE_THRESHOLD > 0 else 'top-k puro'})")
+                  f"({'absoluto dinámico' if umbral > 0.0 else 'top-k puro'})")
 
             resultados = []
             descartados = 0
@@ -1189,10 +1189,13 @@ class SistemaRAGColPaliPuro:
         resultados = []
         has_rejected = False
         state["abortar_reset"] = False # Default
+        umbral_busqueda = 0.0
         if state.get('imagen_consulta') and os.path.exists(state['imagen_consulta']):
             query_mv = self.procesador.generar_embedding_imagen(state['imagen_consulta'])
+            umbral_busqueda = Config.SEARCH_SCORE_THRESHOLD
         else:
             query_mv = self.procesador.generar_embedding_texto(state['consulta_optimizada'])
+            umbral_busqueda = 0.0  # Para la modalidad de texto el score varía por tokens, el threshold no aplica igual.
 
         if query_mv is not None:
             t0 = time.time()
@@ -1208,24 +1211,30 @@ class SistemaRAGColPaliPuro:
             resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
                 query_mv, 
                 query_fde,
-                min_score=Config.SEARCH_SCORE_THRESHOLD,
+                min_score=umbral_busqueda,
                 figuras_filtro=figuras_en_consulta
             )
             t2 = time.time()
             print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
             
             # Filtrar resultados: solo mantener la PRIMERA imagen (mayor score) + todos los textos
+            # NUEVO: Si no hay imagen_consulta del usuario, excluir todas las imágenes de los resultados
             primera_imagen_vista = False
             resultados_filtrados = []
+            incluir_imagenes = state.get('imagen_consulta') and os.path.exists(state['imagen_consulta'])
+            
             for r in resultados:
                 tipo = r.get('payload', {}).get('tipo', 'unknown')
                 if tipo == 'imagen':
-                    if not primera_imagen_vista:
+                    if incluir_imagenes and not primera_imagen_vista:
                         primera_imagen_vista = True
                         resultados_filtrados.append(r)
                     else:
                         img_name = os.path.basename(r.get('payload', {}).get('imagen_path', 'N/A'))
-                        print(f"   ⏭️ Imagen adicional descartada (solo se usa la principal): {img_name}")
+                        if incluir_imagenes:
+                            print(f"   ⏭️ Imagen adicional descartada (solo se usa la principal): {img_name}")
+                        else:
+                            print(f"   ⏭️ Imagen descartada (consulta de solo texto): {img_name}")
                 else:
                     resultados_filtrados.append(r)
             resultados = resultados_filtrados
@@ -1366,16 +1375,13 @@ class SistemaRAGColPaliPuro:
         Returns:
             'imagen' si hay contexto visual disponible, 'texto' en caso contrario
         """
-        # Verificar si hay imagen de consulta válida
+        # Verificar si hay imagen de consulta válida del usuario
         if state.get('imagen_consulta'):
             if os.path.exists(state['imagen_consulta']):
                 return 'imagen'
         
-        # Verificar si hay imágenes relevantes recuperadas
-        if state.get('imagenes_relevantes') and len(state['imagenes_relevantes']) > 0:
-            return 'imagen'
-        
-        # Por defecto, es una consulta de texto
+        # Si no hay imagen del usuario, es una consulta de texto
+        # (independientemente de si hay imágenes recuperadas de la base de datos)
         return 'texto'
 
     def _generar_prompt_sistema(self, tipo_consulta: str) -> str:
@@ -1453,6 +1459,38 @@ ESTRUCTURA DE RESPUESTA:
 3. **Identificación**: Qué órgano/tejido/estructura se observa.
 4. **Evidencia**: Integra lo que se ve en la imagen con lo que dice el texto."""
 
+    def _filtrar_referencias_imagenes(self, contexto_memoria: str) -> str:
+        """
+        Filtra las referencias de imágenes del historial de conversación.
+        
+        Remueve líneas que contienen marcadores de imagen como:
+        - [IMAGEN RECUPERADA N: filename]
+        - [IMAGEN DE CONSULTA DEL USUARIO]
+        
+        Args:
+            contexto_memoria: Historial de conversación que puede contener marcadores de imagen
+            
+        Returns:
+            Historial filtrado sin marcadores de imagen, preservando el contenido textual
+        """
+        import re
+        
+        if not contexto_memoria:
+            return contexto_memoria
+        
+        # Dividir en líneas para procesar cada una
+        lineas = contexto_memoria.split('\n')
+        lineas_filtradas = []
+        
+        for linea in lineas:
+            # Filtrar líneas que contienen marcadores de imagen
+            if '[IMAGEN RECUPERADA' in linea or '[IMAGEN DE CONSULTA DEL USUARIO]' in linea:
+                continue
+            lineas_filtradas.append(linea)
+        
+        # Reconstruir el texto preservando los saltos de línea
+        return '\n'.join(lineas_filtradas)
+
     def _construir_mensaje_usuario(
         self, 
         state: AgentState, 
@@ -1471,7 +1509,12 @@ ESTRUCTURA DE RESPUESTA:
         # Construir historial de conversación si existe
         historial = ""
         if state.get("contexto_memoria"):
-            historial = f"\n========================================\nHISTORIAL DE CONVERSACIÓN RELEVANTE:\n{state['contexto_memoria']}\n========================================\n"
+            # Filtrar referencias de imágenes si es una consulta de texto
+            contexto_a_usar = state['contexto_memoria']
+            if tipo_consulta == 'texto':
+                contexto_a_usar = self._filtrar_referencias_imagenes(contexto_a_usar)
+            
+            historial = f"\n========================================\nHISTORIAL DE CONVERSACIÓN RELEVANTE:\n{contexto_a_usar}\n========================================\n"
         
         # Inicializar contenido del mensaje
         user_content = []
@@ -1577,6 +1620,9 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
                 print(f"   ⚠️ Todas las imágenes fallaron al cargar. Tratando como consulta de texto.")
                 # Reconstruir mensaje como consulta de texto
                 user_content = []
+                
+                # NO filtrar referencias de imágenes en el fallback - preservar el historial original
+                # porque esto sigue siendo una consulta de imagen (tipo_consulta == 'imagen')
                 texto_mensaje = f"""{historial}CONSULTA DEL USUARIO: {state["consulta_usuario"]}
 
 ========================================
