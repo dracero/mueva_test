@@ -191,6 +191,31 @@ class ExtractorOntologia:
         self._groq_client = GroqClient(api_key=api_key)
         self.model = "meta-llama/llama-4-scout-17b-16e-instruct"
 
+    @staticmethod
+    def extraer_caption_imagen(page_fitz, img_bbox, texto_pagina_completo: str) -> str:
+        """Extrae la etiqueta 'Imagen X.X' / 'Fig X.X' + TODO el texto debajo de la imagen."""
+        import re
+        import fitz
+        caption = ""
+        try:
+            page_rect = page_fitz.rect
+            margen_overlap = 10
+            area_expandida = fitz.Rect(0, max(0, img_bbox[3] - margen_overlap), page_rect.width, page_rect.height)
+            texto_expandido = page_fitz.get_text("text", clip=area_expandida).strip()
+            
+            if texto_expandido:
+                caption = texto_expandido
+            else:
+                area_abajo = fitz.Rect(0, img_bbox[3], page_rect.width, page_rect.height)
+                caption = page_fitz.get_text("text", clip=area_abajo).strip()
+        except Exception:
+            pass
+        
+        if caption:
+            caption = re.sub(r'\n\s*\d{1,3}\s*$', '', caption).strip()
+            return caption
+        return texto_pagina_completo[:500] if texto_pagina_completo else ""
+
     def extraer_ontologia_completa(self, contenido: str, num_imagenes: int) -> Dict:
         """Extrae ontología completa del documento"""
         if not self.model:
@@ -398,11 +423,17 @@ class ProcesadorColPaliPuro:
                     page_images_with_pos = []
                     valid_images_this_page = []
                     
+                    # Obtener el texto completo de la página para el fallback del caption
+                    texto_pagina_completo = page.get_text("text").strip()
+                    
                     # MÉTODO PRIMARIO: get_image_info(xrefs=True) devuelve SOLO las imágenes
                     # físicamente dibujadas en esta página (no el diccionario global del PDF)
                     img_info_list = page.get_image_info(xrefs=True)
                     page_xrefs = [info["xref"] for info in img_info_list if info.get("xref")]
+                    
+                    # Guardamos la posición Y y el bbox completo
                     page_y_positions = {info["xref"]: info.get("bbox", (0,0,0,0))[1] for info in img_info_list if info.get("xref")}
+                    page_bboxes = {info["xref"]: info.get("bbox", (0,0,0,0)) for info in img_info_list if info.get("xref")}
                     
                     if page_xrefs:
                         # Extraer imágenes por xref
@@ -415,6 +446,10 @@ class ProcesadorColPaliPuro:
                                 image_bytes = base_image["image"]
                                 ext = base_image["ext"]
                                 y_position = page_y_positions.get(xref, 0.0)
+                                bbox = page_bboxes.get(xref, (0,0,0,0))
+                                
+                                # Extraer caption usando la nueva función
+                                caption_extraido = ExtractorOntologia.extraer_caption_imagen(page, bbox, texto_pagina_completo)
                                 
                                 image_count += 1
                                 img_path = Config.EMBEDDINGS_DIR / f"{nombre_base}_p{page_num+1}_img{image_count}.{ext}"
@@ -455,37 +490,15 @@ class ProcesadorColPaliPuro:
                                         "type": "extracted_figure",
                                         "size": (width, height),
                                         "area": area,
-                                        "y_position": y_position
+                                        "y_position": y_position,
+                                        "caption": caption_extraido
                                     })
                                 else:
                                     os.remove(img_path)
                             except Exception as e:
                                 print(f"⚠️ Error procesando xref {xref} en página {page_num+1}: {e}")
                     else:
-                        # FALLBACK: get_image_info vacío → la imagen está incrustada como Form XObject
-                        # Renderizar la página completa como imagen usando pdf2image
-                        try:
-                            page_imgs = convert_from_path(
-                                pdf_path, first_page=page_num+1, last_page=page_num+1,
-                                dpi=Config.IMAGE_DPI, fmt='jpeg', size=Config.MAX_IMAGE_SIZE
-                            )
-                            if page_imgs:
-                                image_count += 1
-                                img_path = Config.EMBEDDINGS_DIR / f"{nombre_base}_p{page_num+1}_img{image_count}.jpg"
-                                page_imgs[0].save(str(img_path), "JPEG")
-                                width, height = page_imgs[0].size
-                                valid_images_this_page.append({
-                                    "page": page_num + 1,
-                                    "path": str(img_path),
-                                    "type": "page_render",
-                                    "size": (width, height),
-                                    "area": width * height,
-                                    "y_position": 0.0
-                                })
-                                print(f"      📸 Pg {page_num+1}: renderizada como página completa ({width}x{height})")
-                        except Exception as e:
-                            print(f"⚠️ Error renderizando página {page_num+1}: {e}")
-                    
+                        print(f"      ⚠️ Pg {page_num+1}: Imagen incrustada como vector o Form XObject. Omitiendo captura de pantalla para evitar imágenes de texto.")
                     # Conservar SOLO la imagen más grande de la página
                     if valid_images_this_page:
                         largest_image = max(valid_images_this_page, key=lambda x: x["area"])
@@ -515,35 +528,12 @@ class ProcesadorColPaliPuro:
         else:
             print("⚠️ PyMuPDF (fitz) no instalado. Usando extracción de página completa.")
             
-        # Fallback a renderizado de página completa
-        try:
-            # Nota: Requiere Poppler instalado en el sistema
-            pages = convert_from_path(
-                pdf_path,
-                dpi=Config.IMAGE_DPI,
-                fmt='jpeg',
-                size=Config.MAX_IMAGE_SIZE
-            )
-            
-            for page_num, page_image in enumerate(pages, 1):
-                img_path = Config.EMBEDDINGS_DIR / f"{nombre_base}_page_{page_num}.jpg"
-                page_image.save(img_path, quality=90, optimize=True)
-
-                imagenes.append({
-                    "page": page_num,
-                    "path": str(img_path),
-                    "type": "full_page",
-                    "size": page_image.size
-                })
-
-                del page_image
-
-            print(f"✅ {len(imagenes)} páginas extraídas")
-            return imagenes
-
-        except Exception as e:
-            print(f"❌ Error extrayendo imágenes: {e}")
-            return []
+        # Fallback global deshabilitado para evitar imágenes de texto
+        # Si PyMuPDF no puede extraer figuras, no queremos screenshots llenos de texto.
+        if len(imagenes) == 0:
+            print("⚠️ No se pudieron extraer figuras puras del PDF. Se omiten imágenes de texto descriptivo.")
+        
+        return imagenes
 
     def _preprocesar_imagen(self, imagen_path: str) -> Image.Image:
         """Preprocesamiento específico para histopatología"""
@@ -735,6 +725,33 @@ class GestorQdrantMuvera:
                 )
             )
 
+        try:
+            from qdrant_client.models import PayloadSchemaType
+            await client.create_payload_index(
+                collection_name=self.content_mv_collection,
+                field_name="tipo",
+                field_schema=PayloadSchemaType.KEYWORD
+            )
+            await client.create_payload_index(
+                collection_name=self.content_fde_collection,
+                field_name="tipo",
+                field_schema=PayloadSchemaType.KEYWORD
+            )
+            # Índice integer para filtrar imágenes por número de página
+            await client.create_payload_index(
+                collection_name=self.content_mv_collection,
+                field_name="numero_pagina",
+                field_schema=PayloadSchemaType.INTEGER
+            )
+            await client.create_payload_index(
+                collection_name=self.content_fde_collection,
+                field_name="numero_pagina",
+                field_schema=PayloadSchemaType.INTEGER
+            )
+        except Exception as e:
+            # Si ya existe, Qdrant podría lanzar un error o ignorarlo silenciosamente según la versión
+            pass
+
         print("✅ Colecciones listas")
 
     async def insertar_batch_muvera(
@@ -756,7 +773,9 @@ class GestorQdrantMuvera:
         top_k: int = 5,
         prefetch_multiplier: int = Config.SEARCH_PREFETCH_MULTIPLIER,
         min_score: float = 0.0,
-        figuras_filtro: List[str] = None
+        figuras_filtro: List[str] = None,
+        filtro_tipo: str = None,
+        filtro_paginas: List[int] = None
     ) -> Tuple[List[Dict], bool]:
         """
         Búsqueda 2-stage con MUVERA. Retorna (resultados, has_rejected_candidates)
@@ -768,15 +787,24 @@ class GestorQdrantMuvera:
             # STAGE 1: Fast FDE search
             # Optimizacion: with_payload=False para ahorrar memoria/ancho de banda
             qdrant_filter = None
+            from qdrant_client.models import MatchAny, MatchValue, Filter, FieldCondition, HasIdCondition
+            
+            must_conditions = []
+            should_conditions = []
+            
+            if filtro_tipo:
+                must_conditions.append(FieldCondition(key="tipo", match=MatchValue(value=filtro_tipo)))
+                
             if figuras_filtro:
-                from qdrant_client.models import MatchAny
+                should_conditions.append(FieldCondition(key="figuras", match=MatchAny(any=figuras_filtro)))
+                
+            if filtro_paginas:
+                must_conditions.append(FieldCondition(key="numero_pagina", match=MatchAny(any=filtro_paginas)))
+                
+            if must_conditions or should_conditions:
                 qdrant_filter = Filter(
-                    should=[
-                        FieldCondition(
-                            key="figuras",
-                            match=MatchAny(any=figuras_filtro)
-                        )
-                    ]
+                    must=must_conditions if must_conditions else None,
+                    should=should_conditions if should_conditions else None
                 )
 
             fde_response = await client.query_points(
@@ -927,6 +955,140 @@ class MemoriaSQLite:
             return ""
 
 # ============================================================================
+# FUNCIONES PURAS DE CLASIFICACIÓN Y FILTRADO
+# ============================================================================
+
+# Palabras clave que indican solicitud de imagen
+_KEYWORDS_IMAGEN = [
+    "imagen", "foto", "figura", "micrografía",
+    "mostrá", "mostrar", "ver", "visualizar",
+    "enseñar", "muéstrame",
+]
+
+# Patrón compilado: word-boundary match, case-insensitive
+_PATRON_IMAGEN = re.compile(
+    r"\b(?:" + "|".join(re.escape(kw) for kw in _KEYWORDS_IMAGEN) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def detectar_intencion_imagen(texto: str) -> bool:
+    """Retorna True si el texto contiene al menos una palabra clave de imagen.
+
+    Usa matching case-insensitive con word boundaries para evitar falsos
+    positivos (e.g. "iversidad" no matchea "ver").
+    """
+    return bool(_PATRON_IMAGEN.search(texto))
+
+
+def filtrar_resultados_busqueda(
+    resultados: List[Dict],
+    requiere_imagen: bool,
+    tiene_imagen_adjunta: bool,
+) -> Tuple[List[Dict], List[str]]:
+    """Filtra resultados de búsqueda según el tipo de consulta.
+
+    Cuando ``requiere_imagen=False`` y ``tiene_imagen_adjunta=False``, excluye
+    todos los resultados de tipo ``"imagen"`` y retorna ``imagenes_relevantes=[]``.
+
+    Cuando se incluyen imágenes, limita a máximo 3 resultados de tipo ``"imagen"``.
+
+    Returns:
+        Tupla ``(resultados_filtrados, imagenes_relevantes)`` donde
+        ``imagenes_relevantes`` contiene los ``imagen_path`` de los resultados
+        de imagen incluidos.
+    """
+    if not requiere_imagen and not tiene_imagen_adjunta:
+        filtrados = [r for r in resultados if r.get("payload", {}).get("tipo") != "imagen"]
+        return filtrados, []
+
+    # Incluir imágenes pero limitar a 3
+    filtrados: List[Dict] = []
+    imagenes_relevantes: List[str] = []
+    imagen_count = 0
+
+    for r in resultados:
+        payload = r.get("payload", {})
+        if payload.get("tipo") == "imagen":
+            if imagen_count < 3:
+                filtrados.append(r)
+                ruta = payload.get("imagen_path")
+                if ruta:
+                    imagenes_relevantes.append(ruta)
+                imagen_count += 1
+            # Skip images beyond the limit
+        else:
+            filtrados.append(r)
+
+    return filtrados, imagenes_relevantes
+
+
+def extraer_paginas_de_resultados(resultados: List[Dict]) -> List[int]:
+    """Extrae números de página únicos de resultados de tipo ``"texto"``.
+
+    Preserva el orden de primera aparición y elimina duplicados.
+    """
+    vistas: set[int] = set()
+    paginas: List[int] = []
+    for r in resultados:
+        payload = r.get("payload", {})
+        if payload.get("tipo") != "texto":
+            continue
+        pagina = payload.get("numero_pagina")
+        if pagina is not None and pagina not in vistas:
+            vistas.add(pagina)
+            paginas.append(pagina)
+    return paginas
+
+
+def rerank_imagenes_por_caption(
+    query_embedding: np.ndarray,
+    candidatas: List[Dict],
+    umbral: float = 0.45,
+) -> List[Dict]:
+    """Re-rankea imágenes candidatas por similitud coseno con la consulta.
+
+    Calcula la similitud coseno entre el embedding medio de la consulta y el
+    embedding medio del caption de cada candidata.  Filtra por ``umbral`` y
+    retorna las candidatas ordenadas por similitud descendente.
+
+    Cada candidata debe tener una clave ``caption_embedding`` con el
+    multi-vector embedding (array 2-D).
+    """
+    if len(candidatas) == 0:
+        return []
+
+    # Embedding medio de la consulta
+    q = np.asarray(query_embedding, dtype=np.float64)
+    if q.ndim == 2:
+        q = q.mean(axis=0)
+    q_norm = np.linalg.norm(q)
+    if q_norm == 0:
+        return []
+    q = q / q_norm
+
+    scored: List[Tuple[float, Dict]] = []
+    for cand in candidatas:
+        emb = cand.get("caption_embedding")
+        if emb is None:
+            continue
+        c = np.asarray(emb, dtype=np.float64)
+        if c.ndim == 2:
+            c = c.mean(axis=0)
+        c_norm = np.linalg.norm(c)
+        if c_norm == 0:
+            continue
+        c = c / c_norm
+        sim = float(np.dot(q, c))
+        if sim >= umbral:
+            scored.append((sim, cand))
+
+    # Ordenar por similitud descendente
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [cand for _, cand in scored]
+
+
+# ============================================================================
 # ESTADO DEL GRAFO LANGGRAPH
 # ============================================================================
 
@@ -939,6 +1101,7 @@ class AgentState(TypedDict):
     ontologia: Dict
     contexto_ontologico: str
     clasificacion: str
+    requiere_imagen: bool
     consulta_optimizada: str
     filtros_ontologia: List[str]
     resultados_busqueda: List[Dict[str, Any]]
@@ -1117,13 +1280,35 @@ class SistemaRAGColPaliPuro:
         return state
 
     async def _nodo_clasificar(self, state: AgentState) -> AgentState:
+        # Priority 1: Image upload override
+        imagen_upload = (
+            state.get('imagen_consulta')
+            and os.path.exists(state['imagen_consulta'])
+        )
+
         info_imagen = f"\nImagen adjunta: Sí" if state.get('imagen_consulta') else "\nImagen adjunta: No"
         messages = [
-            SystemMessage(content="Eres un experto en histopatología. Clasifica consultas."),
+            SystemMessage(content="""Eres un experto en histopatología. Clasifica consultas.
+Debes determinar la intención del usuario. Si la consulta del usuario pide explícitamente ver, mostrar o buscar una imagen, foto, figura o micrografía, debes indicarlo.
+Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usuario desea ver una imagen, o "REQUIERE_IMAGEN: FALSE" si es solo una pregunta teórica."""),
             HumanMessage(content=f"CONSULTA: {state['consulta_usuario']}{info_imagen}\nCONTEXTO ONTOLÓGICO:\n{state['contexto_ontologico']}")
         ]
         response = await self.llm.ainvoke(messages)
         state["clasificacion"] = response.content
+
+        # Determine requiere_imagen using priority chain:
+        #   Priority 1: Image upload present → True
+        #   Priority 2: LLM says REQUIERE_IMAGEN: TRUE/FALSE → use that
+        #   Priority 3: Fallback to detectar_intencion_imagen(consulta_usuario)
+        if imagen_upload:
+            state["requiere_imagen"] = True
+        elif "REQUIERE_IMAGEN: TRUE" in response.content.upper():
+            state["requiere_imagen"] = True
+        elif "REQUIERE_IMAGEN: FALSE" in response.content.upper():
+            state["requiere_imagen"] = False
+        else:
+            state["requiere_imagen"] = detectar_intencion_imagen(state['consulta_usuario'])
+
         state["trayectoria"].append({"nodo": "clasificar", "timestamp": time.time()})
         return state
 
@@ -1188,110 +1373,82 @@ class SistemaRAGColPaliPuro:
     async def _nodo_buscar(self, state: AgentState) -> AgentState:
         resultados = []
         has_rejected = False
-        state["abortar_reset"] = False # Default
-        umbral_busqueda = 0.0
-        if state.get('imagen_consulta') and os.path.exists(state['imagen_consulta']):
+        state["abortar_reset"] = False  # Default
+
+        requiere_imagen = state.get('requiere_imagen', False)
+        tiene_imagen_adjunta = (
+            bool(state.get('imagen_consulta'))
+            and os.path.exists(state['imagen_consulta'])
+        )
+
+        # ── PATH 3: Consulta_Imagen_Upload ──────────────────────────────
+        if tiene_imagen_adjunta:
+            print("\n🔍 [Path 3 — Consulta_Imagen_Upload] Búsqueda con embedding de imagen")
             query_mv = self.procesador.generar_embedding_imagen(state['imagen_consulta'])
             umbral_busqueda = Config.SEARCH_SCORE_THRESHOLD
-        else:
-            query_mv = self.procesador.generar_embedding_texto(state['consulta_optimizada'])
-            umbral_busqueda = 0.0  # Para la modalidad de texto el score varía por tokens, el threshold no aplica igual.
 
-        if query_mv is not None:
-            t0 = time.time()
-            print(f"\n🔍 Ejecutando búsqueda en Qdrant...")
-            
-            # Generar query FDE (usando método correcto para queries)
-            query_fde = self.procesador.generar_query_muvera(query_mv)
-            
-            # Buscar menciones de figuras en la consulta para forzar el filtrado exacto si es posible
-            figuras_en_consulta = self._extraer_figuras_de_texto(state['consulta_optimizada'])
-            
-            t1 = time.time()
-            resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
-                query_mv, 
-                query_fde,
-                min_score=umbral_busqueda,
-                figuras_filtro=figuras_en_consulta
-            )
-            t2 = time.time()
-            print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
-            
-            # Filtrar resultados: solo mantener la PRIMERA imagen (mayor score) + todos los textos
-            # NUEVO: Si no hay imagen_consulta del usuario, excluir todas las imágenes de los resultados
-            primera_imagen_vista = False
-            resultados_filtrados = []
-            incluir_imagenes = state.get('imagen_consulta') and os.path.exists(state['imagen_consulta'])
-            
-            for r in resultados:
-                tipo = r.get('payload', {}).get('tipo', 'unknown')
-                if tipo == 'imagen':
-                    if incluir_imagenes and not primera_imagen_vista:
-                        primera_imagen_vista = True
-                        resultados_filtrados.append(r)
-                    else:
-                        img_name = os.path.basename(r.get('payload', {}).get('imagen_path', 'N/A'))
-                        if incluir_imagenes:
-                            print(f"   ⏭️ Imagen adicional descartada (solo se usa la principal): {img_name}")
-                        else:
-                            print(f"   ⏭️ Imagen descartada (consulta de solo texto): {img_name}")
-                else:
-                    resultados_filtrados.append(r)
-            resultados = resultados_filtrados
-            
-            # ── VERIFICACIÓN POR EMBEDDINGS ──
-            # Antes de responder, comparamos la imagen del upload con la devuelta
-            # usando MaxSim directo (mismo modelo) con este umbral de verificación.
-            # Esto corrige puntuaciones antiguas del índice.
-            try:
-                UMBRAL_VERIFICACION = float(os.getenv("VERIFICATION_THRESHOLD", "830"))
-            except (ValueError, TypeError):
-                print("⚠️ VERIFICATION_THRESHOLD inválido, usando default 830")
-                UMBRAL_VERIFICACION = 830.0
-            
-            HIGH_CONFIDENCE_THRESHOLD = 890.0
-            if (state.get('imagen_consulta')
-                and os.path.exists(state['imagen_consulta'])
-                and query_mv is not None):
-                
+            if query_mv is not None:
+                t0 = time.time()
+                query_fde = self.procesador.generar_query_muvera(query_mv)
+                figuras_en_consulta = self._extraer_figuras_de_texto(state['consulta_optimizada'])
+                t1 = time.time()
+
+                resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
+                    query_mv, query_fde,
+                    min_score=umbral_busqueda,
+                    figuras_filtro=figuras_en_consulta,
+                )
+                t2 = time.time()
+                print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
+
+                # Filtrar: limitar a 3 imágenes
+                resultados, _ = filtrar_resultados_busqueda(
+                    resultados, requiere_imagen=True, tiene_imagen_adjunta=True,
+                )
+
+                # ── Verificación por embeddings (embedding + dHash) ──
+                try:
+                    UMBRAL_VERIFICACION = float(os.getenv("VERIFICATION_THRESHOLD", "830"))
+                except (ValueError, TypeError):
+                    print("⚠️ VERIFICATION_THRESHOLD inválido, usando default 830")
+                    UMBRAL_VERIFICACION = 830.0
+
+                HIGH_CONFIDENCE_THRESHOLD = 890.0
+
                 top_image = None
                 for r in resultados:
                     if r.get('payload', {}).get('tipo') == 'imagen':
                         top_image = r
                         break
-                
+
                 if top_image:
                     match_path = top_image['payload'].get('imagen_path', '')
                     if match_path and os.path.exists(match_path):
                         match_mv = self.procesador.generar_embedding_imagen(match_path)
-                        
+
                         if match_mv is not None:
                             sim_matrix = np.dot(query_mv, match_mv.T)
                             maxsim_directo = float(np.sum(np.max(sim_matrix, axis=1)))
-                            
+
                             match_name = os.path.basename(match_path)
                             qdrant_score = top_image.get('score', 0.0)
-                            
+
                             print(f"\n   🔬 VERIFICACIÓN EMBEDDINGS: query vs {match_name}")
                             print(f"      MaxSim directo (mismo modelo): {maxsim_directo:.2f}")
                             print(f"      Score Qdrant (índice):         {qdrant_score:.2f}")
                             print(f"      Umbral verificación:           {UMBRAL_VERIFICACION:.2f}")
-                            
+
                             if maxsim_directo < UMBRAL_VERIFICACION:
-                                # Nivel 1: Rechazar sin dHash - score demasiado bajo
                                 print(f"      ❌ Tejido NO coincide semánticamente → score bajo (score: {maxsim_directo:.2f})")
                                 has_rejected = True
                                 resultados = [r for r in resultados if r.get('payload', {}).get('tipo') != 'imagen']
                             elif maxsim_directo >= HIGH_CONFIDENCE_THRESHOLD:
-                                # Nivel 2: Aceptar sin dHash - alta confianza
                                 print(f"      ✅ Match confirmado con alta confianza (score: {maxsim_directo:.2f} >= {HIGH_CONFIDENCE_THRESHOLD}), verificación visual omitida")
                             else:
-                                # Nivel 3: Ejecutar dHash - confianza media (830 <= score < 890)
                                 print(f"      ✅ Tejido coincide semánticamente (score: {maxsim_directo:.2f}). Ejecutando Verificación Visual estricta...")
-                                # Check 2: Verificación visual estricta (dHash) para descartar falsos positivos
                                 dhash_sim = self._verificar_match_visual(state['imagen_consulta'], match_path)
                                 print(f"         Similitud visual (dHash): {dhash_sim:.4f} (umbral: 0.70)")
-                                
+
                                 if dhash_sim < 0.70:
                                     print(f"         ❌ RECHAZADO: Falso positivo de ColPali. Visualmente son tinturas/imágenes distintas.")
                                     has_rejected = True
@@ -1299,24 +1456,144 @@ class SistemaRAGColPaliPuro:
                                 else:
                                     print(f"         ✅ Match visual confirmado")
 
-            print(f"\n📄 Resultados recuperados ({len(resultados)}):")
-            for i, res in enumerate(resultados):
-                payload = res.get('payload', {})
-                score = res.get('score', 0.0)
-                doc_name = payload.get('nombre_archivo', 'unknown')
-                page_num = payload.get('numero_pagina', '?')
-                print(f"   [{i+1}] Score: {score:.4f} | Doc: {doc_name} (Pg {page_num})")
-                if payload.get('tipo') == 'texto':
-                     print(f"       Texto: {payload.get('texto', '')[:100]}...")
-                elif payload.get('tipo') == 'imagen':
-                     print(f"       Imagen: {payload.get('imagen_path', 'N/A')}")
+        # ── PATH 2: Consulta_Imagen_Texto ───────────────────────────────
+        elif requiere_imagen:
+            print("\n🔍 [Path 2 — Consulta_Imagen_Texto] Búsqueda semántica texto→páginas→imágenes")
+            query_mv = self.procesador.generar_embedding_texto(state['consulta_optimizada'])
 
+            if query_mv is not None:
+                t0 = time.time()
+                query_fde = self.procesador.generar_query_muvera(query_mv)
+                figuras_en_consulta = self._extraer_figuras_de_texto(state['consulta_optimizada'])
+                t1 = time.time()
+
+                # Paso 1: Buscar chunks de texto semánticamente similares
+                resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
+                    query_mv, query_fde,
+                    min_score=0.0,
+                    figuras_filtro=figuras_en_consulta,
+                )
+                t2 = time.time()
+                print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
+
+                # Paso 2: Extraer páginas relevantes de los resultados de texto
+                paginas_relevantes = extraer_paginas_de_resultados(resultados)
+
+                if paginas_relevantes:
+                    # Paso 3: Buscar imágenes candidatas en esas páginas
+                    candidatas, _ = await self.gestor_qdrant.buscar_muvera_2stage(
+                        query_mv, query_fde, top_k=10, min_score=0.0,
+                        filtro_tipo="imagen", filtro_paginas=paginas_relevantes[:5],
+                    )
+
+                    if candidatas:
+                        # Paso 4: Generar caption embeddings y re-rankear
+                        # Usamos contexto_texto (texto completo de la página) como
+                        # fallback cuando el caption es corto, ya que el caption
+                        # puede ser solo una etiqueta ("Figura 14.3") mientras que
+                        # contexto_texto contiene la descripción del tejido.
+                        candidatas_con_embedding = []
+                        for img_r in candidatas:
+                            payload = img_r.get("payload", {})
+                            # Preferir contexto_texto (más rico) sobre caption corto
+                            texto_para_embedding = payload.get("contexto_texto", "") or payload.get("texto", "")
+                            if not texto_para_embedding:
+                                texto_para_embedding = payload.get("texto", "")
+                            if not texto_para_embedding:
+                                continue
+                            caption_emb_mv = self.procesador.generar_embedding_texto(texto_para_embedding[:500])
+                            if caption_emb_mv is not None:
+                                img_r["caption_embedding"] = caption_emb_mv
+                                candidatas_con_embedding.append(img_r)
+
+                        imagenes_rankeadas = rerank_imagenes_por_caption(
+                            query_mv, candidatas_con_embedding, umbral=0.45,
+                        )
+
+                        if imagenes_rankeadas:
+                            # Escalar scores al rango de muvera (~800-1000) para merge
+                            for img_r in imagenes_rankeadas:
+                                emb = img_r.get("caption_embedding")
+                                if emb is not None:
+                                    q = np.asarray(query_mv, dtype=np.float64)
+                                    if q.ndim == 2:
+                                        q = q.mean(axis=0)
+                                    q_norm = np.linalg.norm(q)
+                                    c = np.asarray(emb, dtype=np.float64)
+                                    if c.ndim == 2:
+                                        c = c.mean(axis=0)
+                                    c_norm = np.linalg.norm(c)
+                                    if q_norm > 0 and c_norm > 0:
+                                        sim = float(np.dot(q / q_norm, c / c_norm))
+                                    else:
+                                        sim = 0.0
+                                    img_r["score"] = sim * 1000
+                                    img_r["similitud_semantica"] = sim
+
+                            print(f"   📋 Se encontraron {len(imagenes_rankeadas)} imágenes candidatas válidas por caption.")
+                            # Merge text results + re-ranked image results
+                            resultados.extend(imagenes_rankeadas)
+                            resultados.sort(key=lambda x: x['score'], reverse=True)
+                        else:
+                            # Fallback: ninguna imagen superó el umbral de caption,
+                            # pero el usuario pidió imágenes y hay candidatas en
+                            # páginas relevantes. Incluir las mejores por score
+                            # original de Qdrant (la relevancia de página ya es
+                            # una señal fuerte).
+                            fallback = sorted(candidatas, key=lambda x: x.get('score', 0), reverse=True)[:3]
+                            if fallback:
+                                print(f"   📋 Fallback: incluyendo {len(fallback)} imágenes de páginas relevantes (caption bajo umbral).")
+                                resultados.extend(fallback)
+                                resultados.sort(key=lambda x: x['score'], reverse=True)
+
+                # Paso 5: Filtrar — limitar a 3 imágenes
+                resultados, _ = filtrar_resultados_busqueda(
+                    resultados, requiere_imagen=True, tiene_imagen_adjunta=False,
+                )
+
+        # ── PATH 1: Consulta_Texto ──────────────────────────────────────
+        else:
+            print("\n🔍 [Path 1 — Consulta_Texto] Búsqueda de solo texto")
+            query_mv = self.procesador.generar_embedding_texto(state['consulta_optimizada'])
+
+            if query_mv is not None:
+                t0 = time.time()
+                query_fde = self.procesador.generar_query_muvera(query_mv)
+                figuras_en_consulta = self._extraer_figuras_de_texto(state['consulta_optimizada'])
+                t1 = time.time()
+
+                resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
+                    query_mv, query_fde,
+                    min_score=0.0,
+                    figuras_filtro=figuras_en_consulta,
+                )
+                t2 = time.time()
+                print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
+
+                # Excluir TODAS las imágenes — garantizar imagenes_relevantes = []
+                resultados, _ = filtrar_resultados_busqueda(
+                    resultados, requiere_imagen=False, tiene_imagen_adjunta=False,
+                )
+
+        # ── Logging de resultados ───────────────────────────────────────
+        print(f"\n📄 Resultados recuperados ({len(resultados)}):")
+        for i, res in enumerate(resultados):
+            payload = res.get('payload', {})
+            score = res.get('score', 0.0)
+            doc_name = payload.get('nombre_archivo', 'unknown')
+            page_num = payload.get('numero_pagina', '?')
+            print(f"   [{i+1}] Score: {score:.4f} | Doc: {doc_name} (Pg {page_num})")
+            if payload.get('tipo') == 'texto':
+                print(f"       Texto: {payload.get('texto', '')[:100]}...")
+            elif payload.get('tipo') == 'imagen':
+                print(f"       Imagen: {payload.get('imagen_path', 'N/A')}")
+
+        # ── Actualizar estado ───────────────────────────────────────────
         state["resultados_busqueda"] = resultados
         state["abortar_reset"] = has_rejected
 
         if has_rejected:
             print("🚨 ALERTA: Candidatos rechazados detectados. Se abortará la generación para evitar errores de contexto excesivo.")
-            contextos = []
             state["contexto_documentos"] = ""
             state["imagenes_relevantes"] = []
         else:
@@ -1327,7 +1604,7 @@ class SistemaRAGColPaliPuro:
                 tipo = r['payload'].get('tipo', 'unknown')
                 pdf_name = r['payload'].get('pdf_name', 'desconocido')
                 page_num = r['payload'].get('numero_pagina', '?')
-                
+
                 if tipo == 'texto':
                     texto = r['payload'].get('texto', '')
                     figuras = r['payload'].get('figuras', [])
@@ -1345,7 +1622,7 @@ class SistemaRAGColPaliPuro:
 
             state["contexto_documentos"] = "\n\n---\n\n".join(contextos)
             state["imagenes_relevantes"] = imagenes
-            
+
         state["trayectoria"].append({"nodo": "buscar", "timestamp": time.time()})
         return state
 
@@ -1380,8 +1657,11 @@ class SistemaRAGColPaliPuro:
             if os.path.exists(state['imagen_consulta']):
                 return 'imagen'
         
-        # Si no hay imagen del usuario, es una consulta de texto
-        # (independientemente de si hay imágenes recuperadas de la base de datos)
+        # Si el usuario pidió explícitamente una imagen por texto y recuperamos alguna
+        if state.get('requiere_imagen', False) and state.get('imagenes_relevantes'):
+            return 'imagen'
+        
+        # Si no hay imagen del usuario ni pidió explícitamente una, es una consulta de texto
         return 'texto'
 
     def _generar_prompt_sistema(self, tipo_consulta: str) -> str:
@@ -1389,12 +1669,40 @@ class SistemaRAGColPaliPuro:
         Genera el prompt del sistema adaptado al tipo de consulta.
         
         Args:
-            tipo_consulta: 'imagen' o 'texto'
+            tipo_consulta: 'imagen', 'texto', o 'imagen_no_encontrada'
             
         Returns:
             String con el prompt del sistema
         """
-        if tipo_consulta == 'texto':
+        if tipo_consulta == 'imagen_no_encontrada':
+            # Prompt for when user requested images but none were found
+            return """Eres un profesor experto en histopatología con un estilo amigable y educativo. 
+Tu función es ayudar a estudiantes a comprender conceptos de histopatología 
+respondiendo sus preguntas de forma clara y accesible.
+
+NOTA IMPORTANTE: El usuario solicitó ver una imagen, pero no se encontraron imágenes relevantes en la base de datos. 
+Informa al usuario de esto amablemente y ofrece una respuesta textual basada en el contexto disponible.
+Si el contexto es suficiente, proporciona la información textual relevante.
+
+REGLAS DE PRECISIÓN:
+1. Responde basándote en el contexto textual proporcionado.
+2. Puedes realizar deducciones lógicas apoyadas en el texto del contexto, 
+   citando qué parte te permite deducirlo.
+3. Si el contexto es insuficiente, responde honestamente: 
+   "No tengo suficiente información en mis fuentes para responder eso con 
+   precisión. ¿Podrías reformular tu pregunta o darme más detalles sobre qué 
+   aspecto específico te interesa?"
+4. Nunca inventes información que no esté en el contexto.
+5. Usa un tono conversacional pero mantén el rigor científico.
+
+ESTRUCTURA DE RESPUESTA:
+1. **Aviso**: Informa brevemente que no se encontraron imágenes relevantes para la consulta.
+2. **Respuesta directa**: Responde la pregunta de forma clara y concisa con la información textual disponible.
+3. **Explicación**: Desarrolla los conceptos relevantes.
+4. **Evidencia**: Cita las fuentes del contexto que respaldan tu respuesta.
+5. **Contexto adicional** (opcional): Información relacionada que pueda ser útil."""
+
+        elif tipo_consulta == 'texto':
             # Prompt conversacional para consultas de solo texto
             return """Eres un profesor experto en histopatología con un estilo amigable y educativo. 
 Tu función es ayudar a estudiantes a comprender conceptos de histopatología 
@@ -1501,7 +1809,7 @@ ESTRUCTURA DE RESPUESTA:
         
         Args:
             state: Estado actual del agente
-            tipo_consulta: 'imagen' o 'texto'
+            tipo_consulta: 'imagen', 'texto', o 'imagen_no_encontrada'
             
         Returns:
             Lista de partes del mensaje (texto e imágenes)
@@ -1509,9 +1817,9 @@ ESTRUCTURA DE RESPUESTA:
         # Construir historial de conversación si existe
         historial = ""
         if state.get("contexto_memoria"):
-            # Filtrar referencias de imágenes si es una consulta de texto
+            # Filtrar referencias de imágenes si es una consulta de texto o imagen_no_encontrada
             contexto_a_usar = state['contexto_memoria']
-            if tipo_consulta == 'texto':
+            if tipo_consulta in ('texto', 'imagen_no_encontrada'):
                 contexto_a_usar = self._filtrar_referencias_imagenes(contexto_a_usar)
             
             historial = f"\n========================================\nHISTORIAL DE CONVERSACIÓN RELEVANTE:\n{contexto_a_usar}\n========================================\n"
@@ -1519,7 +1827,7 @@ ESTRUCTURA DE RESPUESTA:
         # Inicializar contenido del mensaje
         user_content = []
         
-        if tipo_consulta == 'texto':
+        if tipo_consulta in ('texto', 'imagen_no_encontrada'):
             # Mensaje para consultas de solo texto
             texto_mensaje = f"""{historial}CONSULTA DEL USUARIO: {state["consulta_usuario"]}
 
@@ -1647,9 +1955,19 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
         """Nodo 6: Generar respuesta basada EXCLUSIVAMENTE en contexto recuperado"""
         print("\n💭 Generando respuesta basada en contexto recuperado...")
 
-        # 1. Detectar tipo de consulta
-        tipo_consulta = self._detectar_tipo_consulta(state)
-        print(f"   📝 Tipo de consulta detectado: {tipo_consulta}")
+        # 1. Check for "images requested but not found" case
+        requiere_imagen = state.get('requiere_imagen', False)
+        imagenes_encontradas = len(state.get('imagenes_relevantes', [])) > 0
+        tiene_imagen_consulta = state.get('imagen_consulta') and os.path.exists(state.get('imagen_consulta', ''))
+
+        if requiere_imagen and not imagenes_encontradas and not tiene_imagen_consulta:
+            # User asked for images but none were found and no image was uploaded
+            tipo_consulta = 'imagen_no_encontrada'
+            print("   📝 Tipo de consulta: imagen solicitada pero no encontrada")
+        else:
+            # Normal detection: text-only or image-with-results
+            tipo_consulta = self._detectar_tipo_consulta(state)
+            print(f"   📝 Tipo de consulta detectado: {tipo_consulta}")
 
         # 2. Validar contexto insuficiente (Requirement 5.1, 5.3)
         contexto = state.get("contexto_documentos", "")
@@ -1845,6 +2163,7 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
                 payload = {
                     "pdf_name": str(pdf_name), 
                     "tipo": "imagen", 
+                    "texto": item.get("caption", ""),
                     "imagen_path": contenido, 
                     "contexto_texto": contexto_texto[:1000],
                     "numero_pagina": page_num,
@@ -1870,18 +2189,22 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
         if batch_mv:
             await self.gestor_qdrant.insertar_batch_muvera(batch_mv, batch_fde)
 
-    async def procesar_consulta(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> str:
+    async def procesar_consulta_estado(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> AgentState:
         initial_state = AgentState(
             messages=[], consulta_usuario=consulta, imagen_consulta=imagen_path,
             imagen_base64=imagen_base64,
             contexto_memoria="", ontologia=self.ontologia or {}, contexto_ontologico="",
-            clasificacion="", consulta_optimizada="", filtros_ontologia=[],
+            clasificacion="", requiere_imagen=False, consulta_optimizada="", filtros_ontologia=[],
             resultados_busqueda=[], contexto_documentos="", imagenes_relevantes=[],
             respuesta_final="", trayectoria=[], user_id=user_id, tiempo_inicio=time.time(),
             abortar_reset=False
         )
         config = {"configurable": {"thread_id": user_id}}
         final_state = await self.compiled_graph.ainvoke(initial_state, config=config)
+        return final_state
+
+    async def procesar_consulta(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> str:
+        final_state = await self.procesar_consulta_estado(consulta, imagen_path, imagen_base64, user_id)
         return final_state["respuesta_final"]
 
     def cerrar(self):
@@ -1924,9 +2247,10 @@ class AsistenteHistologiaMultimodal(SistemaRAGColPaliPuro):
 
     async def iniciar_flujo_multimodal(self, consulta_usuario=None, imagen_path=None, imagen_base64=None, ground_truth=None):
         """Alias para procesar_consulta con formato de retorno anterior"""
-        respuesta = await self.procesar_consulta(consulta_usuario or "Analizar contenido", imagen_path, imagen_base64)
+        final_state = await self.procesar_consulta_estado(consulta_usuario or "Analizar contenido", imagen_path, imagen_base64)
         return {
-            "respuesta": respuesta,
+            "respuesta": final_state["respuesta_final"],
+            "imagenes_relevantes": final_state.get("imagenes_relevantes", []),
             "analisis_imagen": "Ver respuesta",
             "resultados_similares": await self.search_muvera(consulta_usuario, imagen_path),
             "scores_ragas": {},

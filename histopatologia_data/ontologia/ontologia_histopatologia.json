@@ -3,15 +3,11 @@
     "Tejido Conectivo Especializado",
     "Cartílago",
     "Hueso",
-    "Pericondrio",
-    "Periostio",
-    "Endostio",
-    "Tráquea",
-    "Laringe",
-    "Piel de Oreja de ratón",
-    "Hueso fracturado",
-    "Disco de Crecimiento",
-    "Pie de feto"
+    "Esqueleto",
+    "Órganos de sostén y locomoción",
+    "Encéfalo",
+    "Médula espinal",
+    "Órganos del abdomen y tórax"
   ],
   "terminologia_histologica": [
     "Pericondrio",
@@ -27,19 +23,13 @@
     "Hueso compacto",
     "Hueso esponjoso",
     "Conducto de Havers",
-    "Conducto de Volckmann",
-    "Nidos",
-    "Condrocitos",
-    "Condroblastos",
-    "Matriz territorial",
-    "Matriz interterritorial",
-    "Fibras elásticas",
-    "Fibras de colágena"
+    "Conducto de Volckmann"
   ],
   "tecnicas_y_tinciones": [
     "Microscopio óptico",
     "H.E. (Hematoxilina y Eosina)",
-    "Laminillas"
+    "Tinción de fibras de colágena",
+    "Tinción de fibras elásticas"
   ],
   "figuras": [
     {
@@ -61,10 +51,6 @@
     {
       "numero": 11.5,
       "descripcion": "Tejido Conectivo Especializado, Cartílago Fibroso"
-    },
-    {
-      "numero": 11.6,
-      "descripcion": "Tejido Conectivo Especializado, Cartílago embrionario"
     },
     {
       "numero": 12.1,
@@ -96,12 +82,14 @@
     }
   ],
   "patologias": [
-    "Hueso fracturado",
-    "Lesiones óseas"
+    "Lesiones óseas",
+    "Fracturas",
+    "Alteraciones del crecimiento óseo",
+    "Enfermedades del tejido conectivo"
   ],
   "metadata": {
-    "fecha": "2026-04-01 16:46:02",
+    "fecha": "2026-04-22 19:51:32",
     "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
-    "num_imagenes": 34
+    "num_imagenes": 24
   }
 }

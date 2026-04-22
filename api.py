@@ -16,7 +16,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from fastapi.staticfiles import StaticFiles
+
 app = FastAPI()
+
+# Mount static directory for images
+os.makedirs("histopatologia_data/embeddings", exist_ok=True)
+app.mount("/histopatologia_data", StaticFiles(directory="histopatologia_data"), name="histopatologia_data")
 
 # Configurar CORS para permitir requests del frontend
 app.add_middleware(
@@ -44,6 +50,19 @@ async def startup_event():
     
     asistente.inicializar_componentes()
     print("✅ Modelos cargados.")
+    
+    # Asegurar que los índices de payload existan en colecciones existentes
+    try:
+        from qdrant_client.models import PayloadSchemaType
+        client = asistente.qdrant_client
+        for col in [asistente.gestor_qdrant.content_mv_collection, asistente.gestor_qdrant.content_fde_collection]:
+            try:
+                await client.create_payload_index(collection_name=col, field_name="numero_pagina", field_schema=PayloadSchemaType.INTEGER)
+                print(f"   ✅ Índice numero_pagina creado en {col}")
+            except Exception:
+                pass  # Ya existe
+    except Exception as e:
+        print(f"⚠️ Error creando índices: {e}")
     
     # Auto-indexación al inicio si hay PDFs y no hay colección
     try:
@@ -92,16 +111,21 @@ async def chat_handler(query: str, image_path: str = None, image_base64: str = N
     if image_base64:
         print(f"🖼️ Imagen adjunta (Base64)")
     
-    # Usar el flujo multimodal existente con imagen si está disponible
-    resultado = await asistente.iniciar_flujo_multimodal(
-        consulta_usuario=query,
+    # Use procesar_consulta_estado for direct access to AgentState
+    final_state = await asistente.procesar_consulta_estado(
+        consulta=query,
         imagen_path=image_path,
         imagen_base64=image_base64
     )
     
-    if resultado and resultado.get("respuesta"):
-        return resultado["respuesta"]
-    return "Lo siento, no pude generar una respuesta."
+    response_text = final_state.get("respuesta_final", "Lo siento, no pude generar una respuesta.")
+    imagenes = final_state.get("imagenes_relevantes", [])
+    
+    # Guarantee list, never None
+    if imagenes is None:
+        imagenes = []
+    
+    return response_text, imagenes
 
 # Configurar CopilotKit
 # sdk = CopilotKitSDK(
@@ -165,7 +189,7 @@ async def chat_endpoint(request: ChatRequest):
     elif image_base64:
         print(f"🖼️ Usando imagen Base64 para contexto")
     
-    response_text = await chat_handler(last_message, image_path, image_base64)
+    response_text, imagenes_relevantes = await chat_handler(last_message, image_path, image_base64)
     
     # Limpiar cualquier imagen en 'uploads' (ya sea subida vía /upload-image o guardada 
     # desde base64) para que no sea reutilizada accidentalmente en los turnos posteriores.
@@ -182,7 +206,10 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         print(f"⚠️ Error archivando imágenes: {e}")
             
-    return {"response": response_text}
+    return {
+        "response": response_text,
+        "imagenes_recuperadas": imagenes_relevantes
+    }
 
 # Intento de uso estándar de CopilotKit si es posible envolver
 # add_fastapi_endpoint(app, sdk, "/copilotkit")

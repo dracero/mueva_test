@@ -3,6 +3,7 @@ import React, { useState, useRef } from "react";
 interface Message {
     role: "user" | "assistant";
     content: string;
+    images?: string[];
 }
 
 export function Chat() {
@@ -38,6 +39,7 @@ export function Chat() {
             const assistantMessage: Message = {
                 role: "assistant",
                 content: data.response || "Sin respuesta",
+                images: data.imagenes_recuperadas || []
             };
             setMessages((prev) => [...prev, assistantMessage]);
         } catch (error) {
@@ -170,6 +172,19 @@ export function Chat() {
                                         {msg.role === "user" ? "👤 Tú" : "🤖 Asistente"}
                                     </span>
                                     <p style={styles.messageContent}>{msg.content}</p>
+                                    {msg.images && msg.images.length > 0 && (
+                                        <div style={styles.imageGallery}>
+                                            {msg.images.map((imgPath, i) => (
+                                                <div key={i} style={styles.imageContainer}>
+                                                    <img
+                                                        src={`http://127.0.0.1:8000/${imgPath}`}
+                                                        alt={`Imagen recuperada ${i + 1}`}
+                                                        style={styles.retrievedImage}
+                                                    />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
                                 </div>
                             ))
                         )}
@@ -367,6 +382,24 @@ const styles: { [key: string]: React.CSSProperties } = {
         margin: 0,
         lineHeight: 1.6,
         whiteSpace: "pre-wrap",
+    },
+    imageGallery: {
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "10px",
+        marginTop: "12px",
+    },
+    imageContainer: {
+        flex: "1 1 calc(50% - 10px)",
+        maxWidth: "100%",
+    },
+    retrievedImage: {
+        width: "100%",
+        borderRadius: "8px",
+        border: "1px solid rgba(76, 175, 80, 0.3)",
+        boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
+        objectFit: "contain",
+        maxHeight: "300px",
     },
     inputContainer: {
         display: "flex",
