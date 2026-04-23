@@ -191,6 +191,8 @@ async def chat_endpoint(request: ChatRequest):
     
     response_text, imagenes_relevantes = await chat_handler(last_message, image_path, image_base64)
     
+    print(f"📤 Respuesta API: {len(imagenes_relevantes)} imágenes: {imagenes_relevantes}")
+    
     # Limpiar cualquier imagen en 'uploads' (ya sea subida vía /upload-image o guardada 
     # desde base64) para que no sea reutilizada accidentalmente en los turnos posteriores.
     try:

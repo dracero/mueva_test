@@ -1,9 +1,24 @@
 import React, { useState, useRef } from "react";
 
+interface ImageItem {
+    path: string;
+    descripcion: string;
+}
+
 interface Message {
     role: "user" | "assistant";
     content: string;
-    images?: string[];
+    images?: (ImageItem | string)[];
+}
+
+function getImageUrl(img: ImageItem | string): string {
+    const path = typeof img === "string" ? img : img.path;
+    return `http://127.0.0.1:8000/${path}`;
+}
+
+function getImageDesc(img: ImageItem | string): string {
+    if (typeof img === "string") return "";
+    return img.descripcion || "";
 }
 
 export function Chat() {
@@ -13,6 +28,7 @@ export function Chat() {
     const [uploadStatus, setUploadStatus] = useState<string>("");
     const [imageBase64, setImageBase64] = useState<string | null>(null);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
+    const [zoomImage, setZoomImage] = useState<{ url: string; desc: string } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const handleSend = async () => {
@@ -32,14 +48,14 @@ export function Chat() {
                         role: m.role,
                         content: m.content,
                     })),
-                    image_base64: imageBase64 ? imageBase64.split(",")[1] : null, // Send only the base64 data, not the header
+                    image_base64: imageBase64 ? imageBase64.split(",")[1] : null,
                 }),
             });
             const data = await response.json();
             const assistantMessage: Message = {
                 role: "assistant",
                 content: data.response || "Sin respuesta",
-                images: data.imagenes_recuperadas || []
+                images: data.imagenes_recuperadas || [],
             };
             setMessages((prev) => [...prev, assistantMessage]);
         } catch (error) {
@@ -90,6 +106,17 @@ export function Chat() {
 
     return (
         <div style={styles.container}>
+            {/* Zoom modal */}
+            {zoomImage && (
+                <div style={styles.modalOverlay} onClick={() => setZoomImage(null)}>
+                    <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+                        <button type="button" style={styles.modalClose} onClick={() => setZoomImage(null)}>✕</button>
+                        <img src={zoomImage.url} alt={zoomImage.desc} style={styles.modalImage} />
+                        {zoomImage.desc && <p style={styles.modalDesc}>{zoomImage.desc}</p>}
+                    </div>
+                </div>
+            )}
+
             {/* Header */}
             <header style={styles.header}>
                 <h1 style={styles.title}>🔬 Histología RAG Multimodal</h1>
@@ -106,6 +133,7 @@ export function Chat() {
 
                         <div style={styles.buttonGroup}>
                             <button
+                                type="button"
                                 onClick={() => fileInputRef.current?.click()}
                                 style={styles.uploadButton}
                             >
@@ -117,9 +145,10 @@ export function Chat() {
                                 accept="image/*"
                                 onChange={handleFileUpload}
                                 style={{ display: "none" }}
+                                aria-label="Seleccionar imagen para análisis"
                             />
 
-                            <button onClick={handleReindex} style={styles.reindexButton}>
+                            <button type="button" onClick={handleReindex} style={styles.reindexButton}>
                                 🔄 Re-indexar PDFs
                             </button>
                         </div>
@@ -134,13 +163,18 @@ export function Chat() {
                         <ul style={styles.instructionList}>
                             <li>Sube una imagen histológica para análisis</li>
                             <li>Haz preguntas sobre tus documentos PDF</li>
+                            <li>Pide imágenes: "mostrá imagen de epitelio"</li>
                             <li>Añade PDFs a <code>./pdfs</code> y re-indexa</li>
                         </ul>
 
                         {imagePreview && (
-                            <div style={{ marginTop: '20px', textAlign: 'center' }}>
-                                <p style={{ fontSize: '12px', marginBottom: '5px' }}>Vista previa:</p>
-                                <img src={imagePreview} alt="Preview" style={{ maxWidth: '100%', borderRadius: '8px', maxHeight: '150px' }} />
+                            <div style={{ marginTop: "20px", textAlign: "center" as const }}>
+                                <p style={{ fontSize: "12px", marginBottom: "5px" }}>Vista previa:</p>
+                                <img
+                                    src={imagePreview}
+                                    alt="Preview"
+                                    style={{ maxWidth: "100%", borderRadius: "8px", maxHeight: "150px" }}
+                                />
                             </div>
                         )}
                     </div>
@@ -153,9 +187,7 @@ export function Chat() {
                             <div style={styles.emptyState}>
                                 <span style={styles.emptyIcon}>💬</span>
                                 <p>Hola, soy tu asistente de histología.</p>
-                                <p style={styles.emptyHint}>
-                                    ¿En qué puedo ayudarte hoy?
-                                </p>
+                                <p style={styles.emptyHint}>¿En qué puedo ayudarte hoy?</p>
                             </div>
                         ) : (
                             messages.map((msg, idx) => (
@@ -163,9 +195,7 @@ export function Chat() {
                                     key={idx}
                                     style={{
                                         ...styles.message,
-                                        ...(msg.role === "user"
-                                            ? styles.userMessage
-                                            : styles.assistantMessage),
+                                        ...(msg.role === "user" ? styles.userMessage : styles.assistantMessage),
                                     }}
                                 >
                                     <span style={styles.messageRole}>
@@ -174,15 +204,22 @@ export function Chat() {
                                     <p style={styles.messageContent}>{msg.content}</p>
                                     {msg.images && msg.images.length > 0 && (
                                         <div style={styles.imageGallery}>
-                                            {msg.images.map((imgPath, i) => (
-                                                <div key={i} style={styles.imageContainer}>
-                                                    <img
-                                                        src={`http://127.0.0.1:8000/${imgPath}`}
-                                                        alt={`Imagen recuperada ${i + 1}`}
-                                                        style={styles.retrievedImage}
-                                                    />
-                                                </div>
-                                            ))}
+                                            {msg.images.map((img, i) => {
+                                                const url = getImageUrl(img);
+                                                const desc = getImageDesc(img);
+                                                return (
+                                                    <div key={i} style={styles.imageContainer}>
+                                                        <img
+                                                            src={url}
+                                                            alt={desc || `Imagen recuperada ${i + 1}`}
+                                                            style={styles.retrievedImage}
+                                                            onClick={() => setZoomImage({ url, desc })}
+                                                            title="Click para agrandar"
+                                                        />
+                                                        {desc && <p style={styles.imageCaption}>{desc}</p>}
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
                                     )}
                                 </div>
@@ -207,6 +244,7 @@ export function Chat() {
                             disabled={isLoading}
                         />
                         <button
+                            type="button"
                             onClick={handleSend}
                             disabled={isLoading || !input.trim()}
                             style={{
@@ -346,7 +384,7 @@ const styles: { [key: string]: React.CSSProperties } = {
         justifyContent: "center",
         alignItems: "center",
         color: "#4caf50",
-        textAlign: "center",
+        textAlign: "center" as const,
     },
     emptyIcon: {
         fontSize: "48px",
@@ -385,12 +423,11 @@ const styles: { [key: string]: React.CSSProperties } = {
     },
     imageGallery: {
         display: "flex",
-        flexWrap: "wrap",
+        flexDirection: "column",
         gap: "10px",
         marginTop: "12px",
     },
     imageContainer: {
-        flex: "1 1 calc(50% - 10px)",
         maxWidth: "100%",
     },
     retrievedImage: {
@@ -400,6 +437,15 @@ const styles: { [key: string]: React.CSSProperties } = {
         boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
         objectFit: "contain",
         maxHeight: "300px",
+        cursor: "pointer",
+        transition: "transform 0.2s",
+    },
+    imageCaption: {
+        margin: "6px 0 0",
+        fontSize: "12px",
+        color: "#2e7d32",
+        lineHeight: 1.4,
+        fontStyle: "italic",
     },
     inputContainer: {
         display: "flex",
@@ -428,5 +474,47 @@ const styles: { [key: string]: React.CSSProperties } = {
         cursor: "pointer",
         fontSize: "14px",
         boxShadow: "0 4px 15px rgba(67, 160, 71, 0.4)",
+    },
+    modalOverlay: {
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        background: "rgba(0,0,0,0.8)",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        zIndex: 1000,
+        cursor: "pointer",
+    },
+    modalContent: {
+        position: "relative",
+        maxWidth: "90vw",
+        maxHeight: "90vh",
+        cursor: "default",
+    },
+    modalImage: {
+        maxWidth: "90vw",
+        maxHeight: "80vh",
+        objectFit: "contain",
+        borderRadius: "12px",
+    },
+    modalDesc: {
+        color: "#fff",
+        textAlign: "center" as const,
+        marginTop: "12px",
+        fontSize: "14px",
+        lineHeight: 1.5,
+    },
+    modalClose: {
+        position: "absolute",
+        top: "-40px",
+        right: "0",
+        background: "none",
+        border: "none",
+        color: "#fff",
+        fontSize: "24px",
+        cursor: "pointer",
     },
 };

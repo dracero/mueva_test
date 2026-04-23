@@ -991,7 +991,7 @@ def filtrar_resultados_busqueda(
     Cuando ``requiere_imagen=False`` y ``tiene_imagen_adjunta=False``, excluye
     todos los resultados de tipo ``"imagen"`` y retorna ``imagenes_relevantes=[]``.
 
-    Cuando se incluyen imágenes, limita a máximo 3 resultados de tipo ``"imagen"``.
+    Cuando se incluyen imágenes, limita a máximo 1 resultado de tipo ``"imagen"``.
 
     Returns:
         Tupla ``(resultados_filtrados, imagenes_relevantes)`` donde
@@ -1010,7 +1010,7 @@ def filtrar_resultados_busqueda(
     for r in resultados:
         payload = r.get("payload", {})
         if payload.get("tipo") == "imagen":
-            if imagen_count < 3:
+            if imagen_count < 1:
                 filtrados.append(r)
                 ruta = payload.get("imagen_path")
                 if ruta:
@@ -1106,7 +1106,7 @@ class AgentState(TypedDict):
     filtros_ontologia: List[str]
     resultados_busqueda: List[Dict[str, Any]]
     contexto_documentos: str
-    imagenes_relevantes: List[str]
+    imagenes_relevantes: List[Any]
     respuesta_final: str
     trayectoria: Annotated[List[Dict[str, Any]], operator.add]
     imagen_base64: Optional[str]
@@ -1458,7 +1458,7 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
 
         # ── PATH 2: Consulta_Imagen_Texto ───────────────────────────────
         elif requiere_imagen:
-            print("\n🔍 [Path 2 — Consulta_Imagen_Texto] Búsqueda semántica texto→páginas→imágenes")
+            print("\n🔍 [Path 2 — Consulta_Imagen_Texto] Búsqueda semántica de texto + imagen asociada")
             query_mv = self.procesador.generar_embedding_texto(state['consulta_optimizada'])
 
             if query_mv is not None:
@@ -1476,77 +1476,58 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                 t2 = time.time()
                 print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
 
-                # Paso 2: Extraer páginas relevantes de los resultados de texto
-                paginas_relevantes = extraer_paginas_de_resultados(resultados)
+                # Paso 2: Obtener todas las imágenes y rankear por similitud
+                # semántica (MaxSim) entre la consulta y el contexto_texto
+                # de cada imagen. Esto encuentra la imagen cuyo texto
+                # asociado es más relevante para lo que pidió el usuario.
+                print("   🖼️ Buscando imagen por similitud semántica del texto asociado...")
+                todas_imagenes, _ = await self.gestor_qdrant.buscar_muvera_2stage(
+                    query_mv, query_fde, top_k=30, min_score=0.0,
+                    filtro_tipo="imagen",
+                )
+                print(f"   🖼️ Total imágenes candidatas: {len(todas_imagenes)}")
 
-                if paginas_relevantes:
-                    # Paso 3: Buscar imágenes candidatas en esas páginas
-                    candidatas, _ = await self.gestor_qdrant.buscar_muvera_2stage(
-                        query_mv, query_fde, top_k=10, min_score=0.0,
-                        filtro_tipo="imagen", filtro_paginas=paginas_relevantes[:5],
-                    )
+                if todas_imagenes:
+                    # Paso 3: Para cada imagen, generar embedding de su
+                    # contexto_texto y calcular MaxSim con la consulta.
+                    imagenes_con_score = []
+                    query_np = np.asarray(query_mv, dtype=np.float32)
 
-                    if candidatas:
-                        # Paso 4: Generar caption embeddings y re-rankear
-                        # Usamos contexto_texto (texto completo de la página) como
-                        # fallback cuando el caption es corto, ya que el caption
-                        # puede ser solo una etiqueta ("Figura 14.3") mientras que
-                        # contexto_texto contiene la descripción del tejido.
-                        candidatas_con_embedding = []
-                        for img_r in candidatas:
-                            payload = img_r.get("payload", {})
-                            # Preferir contexto_texto (más rico) sobre caption corto
-                            texto_para_embedding = payload.get("contexto_texto", "") or payload.get("texto", "")
-                            if not texto_para_embedding:
-                                texto_para_embedding = payload.get("texto", "")
-                            if not texto_para_embedding:
-                                continue
-                            caption_emb_mv = self.procesador.generar_embedding_texto(texto_para_embedding[:500])
-                            if caption_emb_mv is not None:
-                                img_r["caption_embedding"] = caption_emb_mv
-                                candidatas_con_embedding.append(img_r)
+                    for img_r in todas_imagenes:
+                        payload = img_r.get("payload", {})
+                        texto_asociado = payload.get("contexto_texto", "") or payload.get("texto", "")
+                        if not texto_asociado or len(texto_asociado.strip()) < 10:
+                            continue
 
-                        imagenes_rankeadas = rerank_imagenes_por_caption(
-                            query_mv, candidatas_con_embedding, umbral=0.45,
-                        )
+                        # Generar embedding del texto asociado a la imagen
+                        texto_emb = self.procesador.generar_embedding_texto(texto_asociado[:500])
+                        if texto_emb is None:
+                            continue
 
-                        if imagenes_rankeadas:
-                            # Escalar scores al rango de muvera (~800-1000) para merge
-                            for img_r in imagenes_rankeadas:
-                                emb = img_r.get("caption_embedding")
-                                if emb is not None:
-                                    q = np.asarray(query_mv, dtype=np.float64)
-                                    if q.ndim == 2:
-                                        q = q.mean(axis=0)
-                                    q_norm = np.linalg.norm(q)
-                                    c = np.asarray(emb, dtype=np.float64)
-                                    if c.ndim == 2:
-                                        c = c.mean(axis=0)
-                                    c_norm = np.linalg.norm(c)
-                                    if q_norm > 0 and c_norm > 0:
-                                        sim = float(np.dot(q / q_norm, c / c_norm))
-                                    else:
-                                        sim = 0.0
-                                    img_r["score"] = sim * 1000
-                                    img_r["similitud_semantica"] = sim
+                        # MaxSim: sum of max similarity per query token
+                        texto_np = np.asarray(texto_emb, dtype=np.float32)
+                        sim_matrix = np.dot(query_np, texto_np.T)
+                        maxsim = float(np.sum(np.max(sim_matrix, axis=1)))
 
-                            print(f"   📋 Se encontraron {len(imagenes_rankeadas)} imágenes candidatas válidas por caption.")
-                            # Merge text results + re-ranked image results
-                            resultados.extend(imagenes_rankeadas)
-                            resultados.sort(key=lambda x: x['score'], reverse=True)
-                        else:
-                            # Fallback: ninguna imagen superó el umbral de caption,
-                            # pero el usuario pidió imágenes y hay candidatas en
-                            # páginas relevantes. Incluir las mejores por score
-                            # original de Qdrant (la relevancia de página ya es
-                            # una señal fuerte).
-                            fallback = sorted(candidatas, key=lambda x: x.get('score', 0), reverse=True)[:3]
-                            if fallback:
-                                print(f"   📋 Fallback: incluyendo {len(fallback)} imágenes de páginas relevantes (caption bajo umbral).")
-                                resultados.extend(fallback)
-                                resultados.sort(key=lambda x: x['score'], reverse=True)
+                        img_name = os.path.basename(payload.get('imagen_path', 'N/A'))
+                        print(f"      {img_name} (Pg {payload.get('numero_pagina','?')}): MaxSim={maxsim:.2f}")
 
-                # Paso 5: Filtrar — limitar a 3 imágenes
+                        img_r["score"] = 9999 + maxsim  # Prioridad sobre texto + orden por MaxSim
+                        imagenes_con_score.append(img_r)
+
+                    if imagenes_con_score:
+                        # Ordenar por MaxSim descendente y tomar las mejores
+                        imagenes_con_score.sort(key=lambda x: x.get('score', 0), reverse=True)
+                        top_imagenes = imagenes_con_score[:1]
+                        for img_r in top_imagenes:
+                            img_name = os.path.basename(img_r.get('payload', {}).get('imagen_path', 'N/A'))
+                            print(f"   📋 Imagen seleccionada: {img_name} (score={img_r['score']:.2f})")
+                        resultados.extend(top_imagenes)
+                        resultados.sort(key=lambda x: x.get('score', 0), reverse=True)
+                    else:
+                        print(f"   📋 No se encontró imagen con texto asociado relevante.")
+
+                # Paso 4: Filtrar — limitar a 1 imagen
                 resultados, _ = filtrar_resultados_busqueda(
                     resultados, requiere_imagen=True, tiene_imagen_adjunta=False,
                 )
@@ -1614,10 +1595,14 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                 elif tipo == 'imagen':
                     img_path = r['payload'].get('imagen_path')
                     contexto_texto = r['payload'].get('contexto_texto', '')
+                    caption = r['payload'].get('texto', '')
                     figuras = r['payload'].get('figuras', [])
                     figuras_str = ", ".join(figuras) if figuras else "No identificadas"
                     if img_path:
-                        imagenes.append(img_path)
+                        imagenes.append({
+                            "path": img_path,
+                            "descripcion": caption or contexto_texto[:300]
+                        })
                         contextos.append(f"[RESULTADO PRINCIPAL - IMAGEN - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]\nArchivo: {os.path.basename(img_path)}\nFiguras en esta página: {figuras_str}\nTexto asociado a esta imagen: {contexto_texto[:600]}")
 
             state["contexto_documentos"] = "\n\n---\n\n".join(contextos)
@@ -1884,8 +1869,10 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
             
             # Añadir imágenes recuperadas al mensaje
             imagenes_cargadas_exitosamente = 0
-            for i, img_path in enumerate(imagenes_a_procesar):
+            for i, img_item in enumerate(imagenes_a_procesar):
                 try:
+                    # Soportar tanto dict (nuevo) como string (legacy)
+                    img_path = img_item["path"] if isinstance(img_item, dict) else img_item
                     if os.path.exists(img_path):
                         with open(img_path, "rb") as image_file:
                             image_data = base64.b64encode(image_file.read()).decode("utf-8")
@@ -1903,7 +1890,7 @@ Responde basándote ÚNICAMENTE en el contexto de arriba y las IMÁGENES adjunta
                     else:
                         print(f"   ⚠️ Imagen no existe: {img_path}")
                 except Exception as e:
-                    print(f"   ⚠️ Error cargando imagen {img_path}: {e}")
+                    print(f"   ⚠️ Error cargando imagen {img_item}: {e}")
             
             # Si el usuario subió una imagen, también la adjuntamos
             if state.get('imagen_consulta') and os.path.exists(state['imagen_consulta']):
