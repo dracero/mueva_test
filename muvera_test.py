@@ -991,7 +991,7 @@ def filtrar_resultados_busqueda(
     Cuando ``requiere_imagen=False`` y ``tiene_imagen_adjunta=False``, excluye
     todos los resultados de tipo ``"imagen"`` y retorna ``imagenes_relevantes=[]``.
 
-    Cuando se incluyen imágenes, limita a máximo 1 resultado de tipo ``"imagen"``.
+    Cuando se incluyen imágenes, no limita la cantidad.
 
     Returns:
         Tupla ``(resultados_filtrados, imagenes_relevantes)`` donde
@@ -1002,21 +1002,17 @@ def filtrar_resultados_busqueda(
         filtrados = [r for r in resultados if r.get("payload", {}).get("tipo") != "imagen"]
         return filtrados, []
 
-    # Incluir imágenes pero limitar a 3
+    # Incluir todas las imágenes que rankearon
     filtrados: List[Dict] = []
     imagenes_relevantes: List[str] = []
-    imagen_count = 0
 
     for r in resultados:
         payload = r.get("payload", {})
         if payload.get("tipo") == "imagen":
-            if imagen_count < 1:
-                filtrados.append(r)
-                ruta = payload.get("imagen_path")
-                if ruta:
-                    imagenes_relevantes.append(ruta)
-                imagen_count += 1
-            # Skip images beyond the limit
+            filtrados.append(r)
+            ruta = payload.get("imagen_path")
+            if ruta:
+                imagenes_relevantes.append(ruta)
         else:
             filtrados.append(r)
 
@@ -1518,7 +1514,7 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                     if imagenes_con_score:
                         # Ordenar por MaxSim descendente y tomar las mejores
                         imagenes_con_score.sort(key=lambda x: x.get('score', 0), reverse=True)
-                        top_imagenes = imagenes_con_score[:1]
+                        top_imagenes = imagenes_con_score[:3]
                         for img_r in top_imagenes:
                             img_name = os.path.basename(img_r.get('payload', {}).get('imagen_path', 'N/A'))
                             print(f"   📋 Imagen seleccionada: {img_name} (score={img_r['score']:.2f})")
