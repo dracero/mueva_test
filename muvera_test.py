@@ -1453,8 +1453,13 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                                     print(f"         ✅ Match visual confirmado")
 
         # ── PATH 2: Consulta_Imagen_Texto ───────────────────────────────
+        # Método inspirado en histo-test: el LLM genera la respuesta
+        # referenciando imágenes por etiqueta (ej: "Imagen 13.4").
+        # Las imágenes se buscan por número de práctica/capítulo del chunk
+        # más relevante. Ej: si el mejor chunk es "Práctica 13. TEJIDO MUSCULAR",
+        # buscamos todas las imágenes cuya etiqueta empiece con "13".
         elif requiere_imagen:
-            print("\n🔍 [Path 2 — Consulta_Imagen_Texto] Búsqueda semántica de texto + imagen asociada")
+            print("\n🔍 [Path 2 — Consulta_Imagen_Texto] Búsqueda de texto + imágenes por capítulo")
             query_mv = self.procesador.generar_embedding_texto(state['consulta_optimizada'])
 
             if query_mv is not None:
@@ -1463,8 +1468,8 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                 figuras_en_consulta = self._extraer_figuras_de_texto(state['consulta_optimizada'])
                 t1 = time.time()
 
-                # Paso 1: Buscar chunks de texto semánticamente similares
-                resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
+                # Paso 1: Buscar texto semánticamente similar
+                resultados_texto, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
                     query_mv, query_fde,
                     min_score=0.0,
                     figuras_filtro=figuras_en_consulta,
@@ -1472,61 +1477,79 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                 t2 = time.time()
                 print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
 
-                # Paso 2: Obtener todas las imágenes y rankear por similitud
-                # semántica (MaxSim) entre la consulta y el contexto_texto
-                # de cada imagen. Esto encuentra la imagen cuyo texto
-                # asociado es más relevante para lo que pidió el usuario.
-                print("   🖼️ Buscando imagen por similitud semántica del texto asociado...")
-                todas_imagenes, _ = await self.gestor_qdrant.buscar_muvera_2stage(
-                    query_mv, query_fde, top_k=30, min_score=0.0,
-                    filtro_tipo="imagen",
-                )
-                print(f"   🖼️ Total imágenes candidatas: {len(todas_imagenes)}")
+                # Paso 2: Extraer número de práctica/capítulo del chunk más relevante
+                # Buscar patrón "Práctica N." en el texto del mejor chunk
+                capitulo_num = None
+                for r in resultados_texto:
+                    payload = r.get('payload', {})
+                    texto = payload.get('texto', '')
+                    match = re.search(r'[Pp]r[aá]ctica\s+(\d+)', texto)
+                    if match:
+                        capitulo_num = match.group(1)
+                        print(f"   📖 Capítulo detectado: Práctica {capitulo_num} (de Pg {payload.get('numero_pagina','?')})")
+                        break
 
-                if todas_imagenes:
-                    # Paso 3: Para cada imagen, generar embedding de su
-                    # contexto_texto y calcular MaxSim con la consulta.
-                    imagenes_con_score = []
-                    query_np = np.asarray(query_mv, dtype=np.float32)
+                if capitulo_num:
+                    # Paso 3: Buscar todas las imágenes cuya etiqueta empiece con ese número
+                    try:
+                        client = self.gestor_qdrant.client
+                        from qdrant_client.models import Filter, FieldCondition, MatchValue
+                        scroll_result = await client.scroll(
+                            collection_name=self.gestor_qdrant.content_mv_collection,
+                            scroll_filter=Filter(
+                                must=[FieldCondition(key="tipo", match=MatchValue(value="imagen"))]
+                            ),
+                            limit=100,
+                            with_payload=True,
+                            with_vectors=False,
+                        )
+                        puntos = scroll_result[0] if scroll_result else []
 
-                    for img_r in todas_imagenes:
-                        payload = img_r.get("payload", {})
-                        texto_asociado = payload.get("contexto_texto", "") or payload.get("texto", "")
-                        if not texto_asociado or len(texto_asociado.strip()) < 10:
-                            continue
+                        def _norm_etiqueta(s: str) -> str:
+                            return re.sub(r'[\s\.\-]', '', s.lower())
 
-                        # Generar embedding del texto asociado a la imagen
-                        texto_emb = self.procesador.generar_embedding_texto(texto_asociado[:500])
-                        if texto_emb is None:
-                            continue
+                        imagenes_encontradas = []
+                        for punto in puntos:
+                            payload = punto.payload or {}
+                            # Buscar en figuras del punto y en el texto
+                            figs_punto = payload.get("figuras", [])
+                            texto_img = (payload.get("texto", "") + " " + payload.get("contexto_texto", "")).lower()
+                            etiquetas_en_img = re.findall(r'(?:imagen|figura)\s*(\d+)', texto_img)
 
-                        # MaxSim: sum of max similarity per query token
-                        texto_np = np.asarray(texto_emb, dtype=np.float32)
-                        sim_matrix = np.dot(query_np, texto_np.T)
-                        maxsim = float(np.sum(np.max(sim_matrix, axis=1)))
+                            # Verificar si alguna etiqueta empieza con el número de capítulo
+                            es_del_capitulo = False
+                            for f in figs_punto:
+                                nums = re.findall(r'(\d+)', f)
+                                if nums and nums[0] == capitulo_num:
+                                    es_del_capitulo = True
+                                    break
+                            if not es_del_capitulo:
+                                for e in etiquetas_en_img:
+                                    if e == capitulo_num:
+                                        es_del_capitulo = True
+                                        break
 
-                        img_name = os.path.basename(payload.get('imagen_path', 'N/A'))
-                        print(f"      {img_name} (Pg {payload.get('numero_pagina','?')}): MaxSim={maxsim:.2f}")
+                            if es_del_capitulo:
+                                img_path = payload.get("imagen_path", "")
+                                if img_path and os.path.exists(img_path):
+                                    caption = payload.get("texto", "") or payload.get("contexto_texto", "")
+                                    if not any(i.get("path") == img_path for i in imagenes_encontradas):
+                                        imagenes_encontradas.append({
+                                            "path": img_path,
+                                            "descripcion": caption[:300]
+                                        })
+                                        print(f"      ✅ Imagen cap {capitulo_num}: {os.path.basename(img_path)}")
 
-                        img_r["score"] = 9999 + maxsim  # Prioridad sobre texto + orden por MaxSim
-                        imagenes_con_score.append(img_r)
+                        if imagenes_encontradas:
+                            state["imagenes_relevantes"] = imagenes_encontradas[:3]
+                            print(f"   📋 {len(imagenes_encontradas)} imágenes del capítulo {capitulo_num} (mostrando {min(3, len(imagenes_encontradas))}).")
+                    except Exception as e:
+                        print(f"   ⚠️ Error buscando imágenes por capítulo: {e}")
+                else:
+                    print(f"   📋 No se detectó número de capítulo en los chunks.")
 
-                    if imagenes_con_score:
-                        # Ordenar por MaxSim descendente y tomar las mejores
-                        imagenes_con_score.sort(key=lambda x: x.get('score', 0), reverse=True)
-                        top_imagenes = imagenes_con_score[:3]
-                        for img_r in top_imagenes:
-                            img_name = os.path.basename(img_r.get('payload', {}).get('imagen_path', 'N/A'))
-                            print(f"   📋 Imagen seleccionada: {img_name} (score={img_r['score']:.2f})")
-                        resultados.extend(top_imagenes)
-                        resultados.sort(key=lambda x: x.get('score', 0), reverse=True)
-                    else:
-                        print(f"   📋 No se encontró imagen con texto asociado relevante.")
-
-                # Paso 4: Filtrar — limitar a 1 imagen
-                resultados, _ = filtrar_resultados_busqueda(
-                    resultados, requiere_imagen=True, tiene_imagen_adjunta=False,
-                )
+                # Solo texto para el contexto del LLM
+                resultados = [r for r in resultados_texto if r.get('payload', {}).get('tipo') != 'imagen']
 
         # ── PATH 1: Consulta_Texto ──────────────────────────────────────
         else:
@@ -1602,7 +1625,16 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                         contextos.append(f"[RESULTADO PRINCIPAL - IMAGEN - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]\nArchivo: {os.path.basename(img_path)}\nFiguras en esta página: {figuras_str}\nTexto asociado a esta imagen: {contexto_texto[:600]}")
 
             state["contexto_documentos"] = "\n\n---\n\n".join(contextos)
-            state["imagenes_relevantes"] = imagenes
+            # Preservar imágenes encontradas por etiqueta en Path 2
+            if not state.get("imagenes_relevantes"):
+                state["imagenes_relevantes"] = imagenes
+            else:
+                # Agregar imágenes de resultados sin duplicar
+                existing_paths = {i["path"] if isinstance(i, dict) else i for i in state["imagenes_relevantes"]}
+                for img in imagenes:
+                    path = img["path"] if isinstance(img, dict) else img
+                    if path not in existing_paths:
+                        state["imagenes_relevantes"].append(img)
 
         state["trayectoria"].append({"nodo": "buscar", "timestamp": time.time()})
         return state
@@ -1656,32 +1688,37 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
             String con el prompt del sistema
         """
         if tipo_consulta == 'imagen_no_encontrada':
-            # Prompt for when user requested images but none were found
+            # Prompt para cuando el usuario pidió imágenes.
+            # El LLM debe referenciar imágenes por etiqueta (ej: "Imagen 13.4")
+            # basándose en las menciones que aparecen en el contexto textual.
+            # En _nodo_finalizar se parsean esas referencias y se buscan
+            # las imágenes correspondientes en Qdrant.
             return """Eres un profesor experto en histopatología con un estilo amigable y educativo. 
 Tu función es ayudar a estudiantes a comprender conceptos de histopatología 
 respondiendo sus preguntas de forma clara y accesible.
 
-NOTA IMPORTANTE: El usuario solicitó ver una imagen, pero no se encontraron imágenes relevantes en la base de datos. 
-Informa al usuario de esto amablemente y ofrece una respuesta textual basada en el contexto disponible.
-Si el contexto es suficiente, proporciona la información textual relevante.
+INSTRUCCIÓN IMPORTANTE SOBRE IMÁGENES:
+El usuario solicitó ver imágenes. En el contexto textual hay referencias a 
+figuras e imágenes del manual (ej: "Imagen 13.4", "Figura 15.1"). 
+DEBES mencionar estas referencias en tu respuesta usando el formato exacto 
+que aparece en el texto (ej: "Imagen 13.4: Sarcómera").
+El sistema buscará automáticamente las imágenes correspondientes para mostrarlas.
+
+Si el contexto NO menciona ninguna imagen o figura relevante, informa al 
+usuario amablemente que no se encontraron imágenes para su consulta.
 
 REGLAS DE PRECISIÓN:
 1. Responde basándote en el contexto textual proporcionado.
-2. Puedes realizar deducciones lógicas apoyadas en el texto del contexto, 
-   citando qué parte te permite deducirlo.
-3. Si el contexto es insuficiente, responde honestamente: 
-   "No tengo suficiente información en mis fuentes para responder eso con 
-   precisión. ¿Podrías reformular tu pregunta o darme más detalles sobre qué 
-   aspecto específico te interesa?"
-4. Nunca inventes información que no esté en el contexto.
+2. Cuando menciones una imagen, usa el formato exacto del texto: "Imagen X.X" o "Figura X.X".
+3. Si el contexto es insuficiente, responde honestamente.
+4. Nunca inventes referencias a imágenes que no estén en el contexto.
 5. Usa un tono conversacional pero mantén el rigor científico.
 
 ESTRUCTURA DE RESPUESTA:
-1. **Aviso**: Informa brevemente que no se encontraron imágenes relevantes para la consulta.
-2. **Respuesta directa**: Responde la pregunta de forma clara y concisa con la información textual disponible.
+1. **Respuesta directa**: Responde la pregunta de forma clara y concisa.
+2. **Imágenes relevantes**: Menciona las imágenes/figuras del contexto que ilustran el tema.
 3. **Explicación**: Desarrolla los conceptos relevantes.
-4. **Evidencia**: Cita las fuentes del contexto que respaldan tu respuesta.
-5. **Contexto adicional** (opcional): Información relacionada que pueda ser útil."""
+4. **Evidencia**: Cita las fuentes del contexto."""
 
         elif tipo_consulta == 'texto':
             # Prompt conversacional para consultas de solo texto
