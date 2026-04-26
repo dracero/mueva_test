@@ -55,7 +55,7 @@ export function Chat() {
             const assistantMessage: Message = {
                 role: "assistant",
                 content: data.response || "Sin respuesta",
-                images: data.imagenes_recuperadas || [],
+                images: data.mostrar_imagenes ? (data.imagenes_recuperadas || []) : [],
             };
             setMessages((prev) => [...prev, assistantMessage]);
         } catch (error) {

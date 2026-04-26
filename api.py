@@ -125,7 +125,12 @@ async def chat_handler(query: str, image_path: str = None, image_base64: str = N
     if imagenes is None:
         imagenes = []
     
-    return response_text, imagenes
+    # Only show images if the user explicitly requested them or uploaded one
+    requiere_imagen = final_state.get("requiere_imagen", False)
+    tiene_imagen_adjunta = bool(final_state.get("imagen_consulta"))
+    mostrar_imagenes = (requiere_imagen or tiene_imagen_adjunta) and len(imagenes) > 0
+    
+    return response_text, imagenes, mostrar_imagenes
 
 # Configurar CopilotKit
 # sdk = CopilotKitSDK(
@@ -189,9 +194,9 @@ async def chat_endpoint(request: ChatRequest):
     elif image_base64:
         print(f"🖼️ Usando imagen Base64 para contexto")
     
-    response_text, imagenes_relevantes = await chat_handler(last_message, image_path, image_base64)
+    response_text, imagenes_relevantes, mostrar_imagenes = await chat_handler(last_message, image_path, image_base64)
     
-    print(f"📤 Respuesta API: {len(imagenes_relevantes)} imágenes: {imagenes_relevantes}")
+    print(f"📤 Respuesta API: {len(imagenes_relevantes)} imágenes (mostrar={mostrar_imagenes}): {imagenes_relevantes}")
     
     # Limpiar cualquier imagen en 'uploads' (ya sea subida vía /upload-image o guardada 
     # desde base64) para que no sea reutilizada accidentalmente en los turnos posteriores.
@@ -210,7 +215,8 @@ async def chat_endpoint(request: ChatRequest):
             
     return {
         "response": response_text,
-        "imagenes_recuperadas": imagenes_relevantes
+        "imagenes_recuperadas": imagenes_relevantes if mostrar_imagenes else [],
+        "mostrar_imagenes": mostrar_imagenes
     }
 
 # Intento de uso estándar de CopilotKit si es posible envolver
