@@ -1,112 +1,69 @@
 {
-  "sistemas_anatomicos": [
+  "SISTEMAS ANATÓMICOS": [
+    "Testículo",
+    "Gónadas masculinas",
+    "Túnica albugínea",
+    "Túbulos seminíferos",
+    "Lobulillos",
+    "Intersticio testicular",
+    "Estroma de tejido conectivo laxo",
+    "Vasos sanguíneos"
+  ],
+  "TERMINOLOGÍA HISTOLÓGICA": [
+    "Espermatogonias A claras",
+    "Espermatogonias A oscuras",
+    "Espermatogonias B",
+    "Espermatocitos primarios",
+    "Espermatocitos secundarios",
+    "Espermatides inmaduras",
+    "Espermatides maduras",
+    "Espermatozoides",
+    "Células de Sertoli",
+    "Células peritubulares o mioides",
+    "Células de Leydig o intersticiales"
+  ],
+  "TÉCNICAS Y TINCIONES": [
+    "Hematoxilina-Eosina",
+    "Fijación de Bouin",
+    "Tinción HE"
+  ],
+  "FIGURAS": [
     {
-      "organo": "Testículo"
+      "Número": 10,
+      "Descripción": "Vista panorámica del parénquima testicular a 40x"
     },
     {
-      "tejido": "Tejido testicular"
+      "Número": 11,
+      "Descripción": "Vista de mayor aumento de un túbulo seminífero en corte transversal"
     },
     {
-      "estructuras": [
-        "Túbulos seminíferos",
-        "Lobulillos",
-        "Túnica albugínea",
-        "Tabiques",
-        "Intersticio testicular",
-        "Estroma de tejido conectivo laxo"
-      ]
+      "Número": 12,
+      "Descripción": "Espermatogonia A clara"
+    },
+    {
+      "Número": 13,
+      "Descripción": "Espermatogonia A Oscura"
+    },
+    {
+      "Número": 14,
+      "Descripción": "Espermatogonia B"
+    },
+    {
+      "Número": 15,
+      "Descripción": "Espermatocito"
+    },
+    {
+      "Número": 16,
+      "Descripción": "Espermatocito secundario"
+    },
+    {
+      "Número": 17,
+      "Descripción": "Espermatide temprana"
     }
   ],
-  "terminologia_histologica": {
-    "tipos_celulares": [
-      "Espermatogonias A claras",
-      "Espermatogonias A oscuras",
-      "Espermatogonias B",
-      "Espermatocitos primarios",
-      "Espermatocitos secundarios",
-      "Espermátides inmaduras",
-      "Espermátides maduras",
-      "Espermatozoides",
-      "Células de Sertoli",
-      "Células peritubulares o mioides",
-      "Células de Leydig o intersticiales"
-    ],
-    "componentes_tisulares": [
-      "Epitelio seminífero",
-      "Lámina basal",
-      "Cromatina",
-      "Nucléolos",
-      "Citoplasma",
-      "Inclusiones lipídicas",
-      "Fibras colágenas"
-    ]
-  },
-  "tecnicas_y_tinciones": {
-    "metodos_de_procesamiento": [
-      "Fijación: Bouin",
-      "Tinción: Hematoxilina-Eosina"
-    ],
-    "coloraciones": [
-      "Hematoxilina-Eosina"
-    ]
-  },
-  "figuras": [
-    {
-      "numero": 10,
-      "descripcion": "Imagen de testículo"
-    },
-    {
-      "numero": 11,
-      "descripcion": "Imagen de testículo"
-    },
-    {
-      "numero": 12,
-      "descripcion": "Espermatogonia A clara"
-    },
-    {
-      "numero": 13,
-      "descripcion": "Espermatogonia A Oscura"
-    },
-    {
-      "numero": 14,
-      "descripcion": "Espermatogonia B"
-    },
-    {
-      "numero": 15,
-      "descripcion": "Espermatocito"
-    },
-    {
-      "numero": 16,
-      "descripcion": "Espermatocito"
-    },
-    {
-      "numero": 17,
-      "descripcion": "Espermatide temprana"
-    },
-    {
-      "numero": 18,
-      "descripcion": "Espermatide tardía"
-    },
-    {
-      "numero": 19,
-      "descripcion": "Espermatozoides"
-    },
-    {
-      "numero": 20,
-      "descripcion": "Célula de Sertoli"
-    },
-    {
-      "numero": 21,
-      "descripcion": "Célula peritubular"
-    },
-    {
-      "numero": 22,
-      "descripcion": "Grupo de células de Leydig"
-    }
-  ],
-  "patologias": [],
+  "PATOLOGÍAS": [],
   "metadata": {
-    "fecha": "2026-04-29 16:30:35",
+    "fecha": "2026-04-29 20:22:55",
     "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
     "num_imagenes": 13
   }
