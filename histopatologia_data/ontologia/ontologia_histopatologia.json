@@ -1,114 +1,113 @@
 {
   "sistemas_anatomicos": [
-    "Tejido Conectivo Especializado",
-    "Cartílago",
-    "Hueso",
-    "Pericondrio",
-    "Periostio",
-    "Endostio",
-    "Tráquea",
-    "Laringe",
-    "Piel de Oreja de ratón",
-    "Hueso fracturado",
-    "Disco de Crecimiento",
-    "Encéfalo",
-    "Médula espinal",
-    "Órganos del abdomen y tórax"
-  ],
-  "terminologia_histologica": [
-    "Pericondrio",
-    "Cartílago hialino",
-    "Cartílago elástico",
-    "Cartílago fibroso",
-    "Osteona",
-    "Endostio",
-    "Periostio",
-    "Osteoblastos",
-    "Osteocitos",
-    "Osteoclastos",
-    "Hueso compacto",
-    "Hueso esponjoso",
-    "Conducto de Havers",
-    "Conducto de Volckmann",
-    "Nidos",
-    "Condrocitos",
-    "Condroblastos",
-    "Matriz territorial",
-    "Matriz interterritorial",
-    "Fibroblastos",
-    "Fibras de colágena",
-    "Células osteógenas"
-  ],
-  "tecnicas_y_tinciones": [
-    "Microscopio óptico",
-    "H.E. (Hematoxilina y Eosina)",
-    "Laminillas",
-    "Modelo plástico y real",
-    "Computadora personal",
-    "Cañón"
-  ],
-  "figuras": [
     {
-      "numero": 11.1,
-      "descripcion": "Tejido Conectivo Especializado, Cartílago Hialino"
+      "organo": "Testículo"
     },
     {
-      "numero": 11.2,
-      "descripcion": "Tejido Conectivo Especializado, Cartílago Hialino"
+      "tejido": "Tejido testicular"
     },
     {
-      "numero": 11.3,
-      "descripcion": "Tejido Conectivo Especializado, Cartílago Elástico"
-    },
-    {
-      "numero": 11.4,
-      "descripcion": "Tejido Conectivo Especializado, Cartílago Hialino del Disco de Crecimiento"
-    },
-    {
-      "numero": 11.5,
-      "descripcion": "Tejido Conectivo Especializado, Cartílago Fibroso"
-    },
-    {
-      "numero": 11.6,
-      "descripcion": "Tejido Conectivo Especializado, Cartílago embrionario"
-    },
-    {
-      "numero": 12.1,
-      "descripcion": "Tejido Conectivo Especializado, Óseo"
-    },
-    {
-      "numero": 12.2,
-      "descripcion": "Tejido Conectivo Especializado, Óseo"
-    },
-    {
-      "numero": 12.3,
-      "descripcion": "Tejido Conectivo Especializado, Óseo"
-    },
-    {
-      "numero": 12.4,
-      "descripcion": "Tejido Conectivo Especializado, Óseo"
-    },
-    {
-      "numero": 12.5,
-      "descripcion": "Hueso compacto, hueso óseo"
-    },
-    {
-      "numero": 12.6,
-      "descripcion": "Hueso compacto"
-    },
-    {
-      "numero": 12.7,
-      "descripcion": "Hueso compacto"
+      "estructuras": [
+        "Túbulos seminíferos",
+        "Lobulillos",
+        "Túnica albugínea",
+        "Tabiques",
+        "Intersticio testicular",
+        "Estroma de tejido conectivo laxo"
+      ]
     }
   ],
-  "patologias": [
-    "Hueso fracturado",
-    "Lesiones óseas",
-    "Alteraciones del cartílago"
+  "terminologia_histologica": {
+    "tipos_celulares": [
+      "Espermatogonias A claras",
+      "Espermatogonias A oscuras",
+      "Espermatogonias B",
+      "Espermatocitos primarios",
+      "Espermatocitos secundarios",
+      "Espermátides inmaduras",
+      "Espermátides maduras",
+      "Espermatozoides",
+      "Células de Sertoli",
+      "Células peritubulares o mioides",
+      "Células de Leydig o intersticiales"
+    ],
+    "componentes_tisulares": [
+      "Epitelio seminífero",
+      "Lámina basal",
+      "Cromatina",
+      "Nucléolos",
+      "Citoplasma",
+      "Inclusiones lipídicas",
+      "Fibras colágenas"
+    ]
+  },
+  "tecnicas_y_tinciones": {
+    "metodos_de_procesamiento": [
+      "Fijación: Bouin",
+      "Tinción: Hematoxilina-Eosina"
+    ],
+    "coloraciones": [
+      "Hematoxilina-Eosina"
+    ]
+  },
+  "figuras": [
+    {
+      "numero": 10,
+      "descripcion": "Imagen de testículo"
+    },
+    {
+      "numero": 11,
+      "descripcion": "Imagen de testículo"
+    },
+    {
+      "numero": 12,
+      "descripcion": "Espermatogonia A clara"
+    },
+    {
+      "numero": 13,
+      "descripcion": "Espermatogonia A Oscura"
+    },
+    {
+      "numero": 14,
+      "descripcion": "Espermatogonia B"
+    },
+    {
+      "numero": 15,
+      "descripcion": "Espermatocito"
+    },
+    {
+      "numero": 16,
+      "descripcion": "Espermatocito"
+    },
+    {
+      "numero": 17,
+      "descripcion": "Espermatide temprana"
+    },
+    {
+      "numero": 18,
+      "descripcion": "Espermatide tardía"
+    },
+    {
+      "numero": 19,
+      "descripcion": "Espermatozoides"
+    },
+    {
+      "numero": 20,
+      "descripcion": "Célula de Sertoli"
+    },
+    {
+      "numero": 21,
+      "descripcion": "Célula peritubular"
+    },
+    {
+      "numero": 22,
+      "descripcion": "Grupo de células de Leydig"
+    }
   ],
+  "patologias": [],
   "metadata": {
-    "fecha": "2026-04-25 18:08:24",
+    "fecha": "2026-04-29 16:30:35",
     "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
-    "num_imagenes": 24
+    "num_imagenes": 13
   }
 }

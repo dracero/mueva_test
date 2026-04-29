@@ -1468,13 +1468,12 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                                     print(f"         ✅ Match visual confirmado")
 
         # ── PATH 2: Consulta_Imagen_Texto ───────────────────────────────
-        # Método inspirado en histo-test: el LLM genera la respuesta
-        # referenciando imágenes por etiqueta (ej: "Imagen 13.4").
-        # Las imágenes se buscan por número de práctica/capítulo del chunk
-        # más relevante. Ej: si el mejor chunk es "Práctica 13. TEJIDO MUSCULAR",
-        # buscamos todas las imágenes cuya etiqueta empiece con "13".
+        # Estrategia: usar MUVERA para identificar el documento relevante,
+        # luego buscar en TODOS los chunks de texto de ese documento las
+        # etiquetas "Imagen N: descripción" y asociarlas con las imágenes
+        # de la misma página.
         elif requiere_imagen:
-            print("\n🔍 [Path 2 — Consulta_Imagen_Texto] Búsqueda de texto + imágenes por capítulo")
+            print("\n🔍 [Path 2 — Consulta_Imagen_Texto] Búsqueda de texto + imágenes por etiqueta semántica")
             query_mv = self.procesador.generar_embedding_texto(state['consulta_optimizada'])
 
             if query_mv is not None:
@@ -1483,7 +1482,7 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                 figuras_en_consulta = self._extraer_figuras_de_texto(state['consulta_optimizada'])
                 t1 = time.time()
 
-                # Paso 1: Buscar texto semánticamente similar
+                # Paso 1: Buscar texto semánticamente similar (para contexto del LLM)
                 resultados_texto, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
                     query_mv, query_fde,
                     min_score=0.0,
@@ -1493,37 +1492,103 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                 t2 = time.time()
                 print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
 
-                # Paso 2: Extraer referencias específicas de figuras de los textos relevantes
-                # Estrategia en 3 niveles:
-                #   A) Figuras mencionadas en el TEXTO del chunk (ej: "Imagen 11.5")
-                #   B) Figuras del campo `figuras` del payload (extraídas en indexación)
-                #   C) Fallback: buscar imágenes en las MISMAS PÁGINAS de los resultados
-                figuras_referenciadas = set()
-                paginas_relevantes = set()
+                # Paso 2: Identificar el documento principal de los resultados
+                doc_scores = {}
                 for r in resultados_texto:
                     payload = r.get('payload', {})
-                    texto = payload.get('texto', '')
-                    # A) Figuras del texto
-                    figs = self._extraer_figuras_de_texto(texto)
-                    figuras_referenciadas.update(figs)
-                    # B) Figuras del payload
-                    figs_payload = payload.get('figuras', [])
-                    figuras_referenciadas.update(figs_payload)
-                    # Guardar páginas para fallback C
-                    pg = payload.get('numero_pagina')
-                    if pg is not None:
-                        paginas_relevantes.add(pg)
-                
-                if figuras_referenciadas:
-                    print(f"   📖 Figuras referenciadas en textos relevantes: {sorted(figuras_referenciadas)}")
-                
+                    doc = payload.get('nombre_archivo', '')
+                    score = r.get('score', 0.0)
+                    if doc:
+                        doc_scores[doc] = doc_scores.get(doc, 0.0) + score
+                # Documento con mayor score acumulado
+                doc_principal = max(doc_scores, key=doc_scores.get) if doc_scores else ''
+                print(f"   📖 Documento principal: {doc_principal} (score acumulado: {doc_scores.get(doc_principal, 0):.2f})")
+
+                # Paso 3: Scroll de TODOS los chunks de texto del documento principal
+                # para buscar etiquetas "Imagen N: descripción"
+                paginas_con_etiqueta = {}  # página -> lista de descripciones de etiqueta
                 imagenes_encontradas = []
-                
-                # Scroll de TODAS las imágenes (se usa tanto para match directo como para fallback)
-                all_image_points = []
                 try:
                     client = self.gestor_qdrant.client
                     from qdrant_client.models import Filter, FieldCondition, MatchValue
+                    if doc_principal:
+                        scroll_texto = await client.scroll(
+                            collection_name=self.gestor_qdrant.content_mv_collection,
+                            scroll_filter=Filter(
+                                must=[
+                                    FieldCondition(key="tipo", match=MatchValue(value="texto")),
+                                    FieldCondition(key="nombre_archivo", match=MatchValue(value=doc_principal)),
+                                ]
+                            ),
+                            limit=1000,
+                            with_payload=True,
+                            with_vectors=False,
+                        )
+                        chunks_doc = scroll_texto[0] if scroll_texto else []
+                        print(f"   📄 {len(chunks_doc)} chunks de texto en {doc_principal}")
+
+                        # Buscar etiquetas "Imagen N: descripción" en cada chunk
+                        for chunk in chunks_doc:
+                            cp = chunk.payload or {}
+                            texto_chunk = cp.get('texto', '')
+                            pg_chunk = cp.get('numero_pagina')
+                            # Capturar "Imagen 19: Espermatozoides", "Imagen 6: Corte transversal", etc.
+                            matches = re.findall(r'[Ii]magen\s+(\d+(?:[\.\-·]\d+)?)\s*:\s*([^\n]{1,100})', texto_chunk)
+                            for num, desc in matches:
+                                if pg_chunk is not None:
+                                    paginas_con_etiqueta.setdefault(pg_chunk, []).append({
+                                        'numero': num,
+                                        'descripcion': desc.strip(),
+                                    })
+                        if paginas_con_etiqueta:
+                            print(f"   🏷️ Etiquetas encontradas en {doc_principal}:")
+                            for pg, etiquetas in sorted(paginas_con_etiqueta.items()):
+                                for et in etiquetas:
+                                    print(f"      Pg {pg}: Imagen {et['numero']}: {et['descripcion']}")
+                except Exception as e:
+                    print(f"   ⚠️ Error buscando etiquetas de texto: {e}")
+
+                # Paso 4: Rerank las etiquetas por similitud semántica con la consulta
+                # Esto determina CUÁLES imágenes son relevantes para la consulta
+                etiquetas_rankeadas = []
+                if paginas_con_etiqueta:
+                    for pg, etiquetas in paginas_con_etiqueta.items():
+                        for et in etiquetas:
+                            texto_etiqueta = f"Imagen {et['numero']}: {et['descripcion']}"
+                            emb = self.procesador.generar_embedding_texto(texto_etiqueta)
+                            if emb is not None:
+                                # Calcular similitud con la consulta
+                                q = np.asarray(query_mv, dtype=np.float64)
+                                if q.ndim == 2:
+                                    q_mean = q.mean(axis=0)
+                                else:
+                                    q_mean = q
+                                q_norm = np.linalg.norm(q_mean)
+                                if q_norm > 0:
+                                    q_mean = q_mean / q_norm
+                                c = np.asarray(emb, dtype=np.float64)
+                                if c.ndim == 2:
+                                    c_mean = c.mean(axis=0)
+                                else:
+                                    c_mean = c
+                                c_norm = np.linalg.norm(c_mean)
+                                if c_norm > 0:
+                                    c_mean = c_mean / c_norm
+                                sim = float(np.dot(q_mean, c_mean))
+                                etiquetas_rankeadas.append({
+                                    'pagina': pg,
+                                    'numero': et['numero'],
+                                    'descripcion': et['descripcion'],
+                                    'similitud': sim,
+                                })
+                                print(f"      📊 Imagen {et['numero']}: {et['descripcion'][:50]} → sim={sim:.4f}")
+
+                    # Ordenar por similitud descendente
+                    etiquetas_rankeadas.sort(key=lambda x: x['similitud'], reverse=True)
+
+                # Paso 5: Scroll de TODAS las imágenes y asociar con etiquetas
+                all_image_points = []
+                try:
                     scroll_result = await client.scroll(
                         collection_name=self.gestor_qdrant.content_mv_collection,
                         scroll_filter=Filter(
@@ -1537,82 +1602,67 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                 except Exception as e:
                     print(f"   ⚠️ Error obteniendo imágenes de Qdrant: {e}")
 
-                # --- Intento A+B: match por figuras referenciadas ---
-                if figuras_referenciadas and all_image_points:
-                    candidatas_imagen = []
-                    for punto in all_image_points:
-                        payload = punto.payload or {}
-                        figs_punto = set(payload.get("figuras", []))
-                        
-                        if figs_punto & figuras_referenciadas:
-                            cand = {
-                                "id": punto.id,
-                                "payload": payload,
-                            }
-                            caption = payload.get('texto', '') or payload.get('contexto_texto', '')
-                            if caption:
-                                cand['caption_embedding'] = self.procesador.generar_embedding_texto(caption)
-                            candidatas_imagen.append(cand)
-                            print(f"      🔗 Match por figura: {figs_punto & figuras_referenciadas} → {os.path.basename(payload.get('imagen_path', ''))}")
-                            
-                    if candidatas_imagen:
-                        print(f"   🔎 {len(candidatas_imagen)} imágenes coinciden con figuras. Rerankeando por caption...")
-                        imagenes_reranked = rerank_imagenes_por_caption(query_mv, candidatas_imagen, umbral=0.45)
-                        
-                        for r in imagenes_reranked[:3]:
-                            img_path = r.get("payload", {}).get("imagen_path", "")
-                            caption = r.get("payload", {}).get("texto", "") or r.get("payload", {}).get("contexto_texto", "")
-                            if img_path and os.path.exists(img_path):
-                                if not any(i.get("path") == img_path for i in imagenes_encontradas):
+                # Paso 6: Para las top 3 etiquetas, buscar la imagen en la misma página
+                paginas_usadas = set()
+                if etiquetas_rankeadas:
+                    for et in etiquetas_rankeadas[:3]:
+                        pg_target = et['pagina']
+                        if pg_target in paginas_usadas:
+                            continue
+                        # Buscar imagen del documento principal en esa página
+                        for punto in all_image_points:
+                            payload = punto.payload or {}
+                            if (payload.get('nombre_archivo', '') == doc_principal
+                                    and payload.get('numero_pagina') == pg_target):
+                                img_path = payload.get('imagen_path', '')
+                                if img_path and os.path.exists(img_path):
+                                    desc = f"Imagen {et['numero']}: {et['descripcion']}"
                                     imagenes_encontradas.append({
                                         "path": img_path,
-                                        "descripcion": caption[:300]
+                                        "descripcion": desc[:300]
                                     })
-                                    print(f"      ✅ Imagen recuperada: {os.path.basename(img_path)}")
+                                    paginas_usadas.add(pg_target)
+                                    print(f"      ✅ Imagen seleccionada: {os.path.basename(img_path)} (Imagen {et['numero']}: {et['descripcion'][:50]})")
+                                    break
 
-                # --- Fallback C: buscar imágenes en las mismas páginas (±3) ---
-                if not imagenes_encontradas and paginas_relevantes and all_image_points:
-                    # Expandir a páginas cercanas: las imágenes suelen estar
-                    # en las páginas siguientes al texto introductorio del capítulo
-                    paginas_expandidas = set()
-                    for pg in paginas_relevantes:
-                        for offset in range(-1, 4):  # -1 a +3
-                            paginas_expandidas.add(pg + offset)
-                    print(f"   🔄 Fallback: buscando imágenes en páginas {sorted(paginas_expandidas)}")
-                    candidatas_pagina = []
+                # Paso 7: Fallback — si no se encontraron imágenes por etiqueta,
+                # usar imágenes del documento principal rankeadas por caption
+                if not imagenes_encontradas and all_image_points:
+                    print(f"   🔄 Fallback: rerank por caption de imágenes de {doc_principal}")
+                    candidatas_fallback = []
                     for punto in all_image_points:
                         payload = punto.payload or {}
-                        pg_img = payload.get("numero_pagina")
-                        if pg_img in paginas_expandidas:
-                            cand = {
+                        if payload.get('nombre_archivo', '') != doc_principal:
+                            continue
+                        caption_directo = (payload.get('texto', '') or '').strip()
+                        contexto_pagina = (payload.get('contexto_texto', '') or '').strip()
+                        caption_combinado = f"{caption_directo} {contexto_pagina}".strip()
+                        if not caption_combinado:
+                            continue
+                        emb = self.procesador.generar_embedding_texto(caption_combinado)
+                        if emb is not None:
+                            candidatas_fallback.append({
                                 "id": punto.id,
                                 "payload": payload,
-                            }
-                            caption = payload.get('texto', '') or payload.get('contexto_texto', '')
-                            if caption:
-                                cand['caption_embedding'] = self.procesador.generar_embedding_texto(caption)
-                            candidatas_pagina.append(cand)
-                            print(f"      📄 Imagen en Pg {pg_img}: {os.path.basename(payload.get('imagen_path', ''))}")
-                    
-                    if candidatas_pagina:
-                        print(f"   🔎 {len(candidatas_pagina)} imágenes en páginas relevantes. Rerankeando por caption...")
-                        imagenes_reranked = rerank_imagenes_por_caption(query_mv, candidatas_pagina, umbral=0.40)
-                        
+                                "caption_embedding": emb,
+                            })
+                    if candidatas_fallback:
+                        imagenes_reranked = rerank_imagenes_por_caption(query_mv, candidatas_fallback, umbral=0.0)
                         for r in imagenes_reranked[:3]:
                             img_path = r.get("payload", {}).get("imagen_path", "")
                             caption = r.get("payload", {}).get("texto", "") or r.get("payload", {}).get("contexto_texto", "")
                             if img_path and os.path.exists(img_path):
-                                if not any(i.get("path") == img_path for i in imagenes_encontradas):
-                                    imagenes_encontradas.append({
-                                        "path": img_path,
-                                        "descripcion": caption[:300]
-                                    })
-                                    print(f"      ✅ Imagen recuperada (por página): {os.path.basename(img_path)}")
+                                imagenes_encontradas.append({
+                                    "path": img_path,
+                                    "descripcion": caption[:300]
+                                })
+                                print(f"      ✅ Imagen seleccionada (fallback): {os.path.basename(img_path)}")
 
                 if imagenes_encontradas:
                     state["imagenes_relevantes"] = imagenes_encontradas
                     print(f"   📋 {len(imagenes_encontradas)} imágenes relevantes recuperadas.")
                 else:
+                    state["imagenes_relevantes"] = []
                     print(f"   📋 No se encontraron imágenes relevantes.")
 
                 # Solo texto para el contexto del LLM
@@ -2128,6 +2178,8 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
         patrones_imagen = [
             r'[Ii]magen\s+(\d+[\-\.·]\d+)',
             r'IMAGEN\s+(\d+[\-\.·]\d+)',
+            r'[Ii]magen\s+(\d+)(?=\s*:)',
+            r'IMAGEN\s+(\d+)(?=\s*:)',
         ]
         figuras = set()
         for patron in patrones_figura:
