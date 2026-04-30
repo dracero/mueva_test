@@ -3,13 +3,14 @@
     "Testículo",
     "Gónadas masculinas",
     "Túnica albugínea",
-    "Túbulos seminíferos",
     "Lobulillos",
+    "Túbulos seminíferos",
     "Intersticio testicular",
     "Estroma de tejido conectivo laxo",
     "Vasos sanguíneos"
   ],
   "TERMINOLOGÍA HISTOLÓGICA": [
+    "Células germinales",
     "Espermatogonias A claras",
     "Espermatogonias A oscuras",
     "Espermatogonias B",
@@ -24,46 +25,47 @@
   ],
   "TÉCNICAS Y TINCIONES": [
     "Hematoxilina-Eosina",
-    "Fijación de Bouin",
-    "Tinción HE"
+    "Fijación: Bouin",
+    "Magnificación: 40x",
+    "Código interno: #RS001"
   ],
   "FIGURAS": [
     {
-      "Número": 10,
-      "Descripción": "Vista panorámica del parénquima testicular a 40x"
+      "número": 10,
+      "descripción": "Vista panorámica del parénquima testicular a 40x"
     },
     {
-      "Número": 11,
-      "Descripción": "Vista de mayor aumento de un túbulo seminífero en corte transversal"
+      "número": 11,
+      "descripción": "Vista de mayor aumento de un túbulo seminífero en corte transversal"
     },
     {
-      "Número": 12,
-      "Descripción": "Espermatogonia A clara"
+      "número": 12,
+      "descripción": "Espermatogonia A clara"
     },
     {
-      "Número": 13,
-      "Descripción": "Espermatogonia A Oscura"
+      "número": 13,
+      "descripción": "Espermatogonia A Oscura"
     },
     {
-      "Número": 14,
-      "Descripción": "Espermatogonia B"
+      "número": 14,
+      "descripción": "Espermatogonia B"
     },
     {
-      "Número": 15,
-      "Descripción": "Espermatocito"
+      "número": 15,
+      "descripción": "Espermatocito"
     },
     {
-      "Número": 16,
-      "Descripción": "Espermatocito secundario"
+      "número": 16,
+      "descripción": "Espermatocito secundario"
     },
     {
-      "Número": 17,
-      "Descripción": "Espermatide temprana"
+      "número": 17,
+      "descripción": "Espermatide temprana"
     }
   ],
   "PATOLOGÍAS": [],
   "metadata": {
-    "fecha": "2026-04-29 20:22:55",
+    "fecha": "2026-04-30 14:23:19",
     "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
     "num_imagenes": 13
   }

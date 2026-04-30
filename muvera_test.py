@@ -1436,6 +1436,7 @@ Ejemplo:
                 )
 
                 # ── Verificación por embeddings (embedding + dHash) ──
+                # Verifica CADA imagen individualmente contra la imagen del usuario.
                 try:
                     UMBRAL_VERIFICACION = float(os.getenv("VERIFICATION_THRESHOLD", "830"))
                 except (ValueError, TypeError):
@@ -1444,46 +1445,52 @@ Ejemplo:
 
                 HIGH_CONFIDENCE_THRESHOLD = 890.0
 
-                top_image = None
-                for r in resultados:
-                    if r.get('payload', {}).get('tipo') == 'imagen':
-                        top_image = r
-                        break
+                imagenes_a_verificar = [
+                    r for r in resultados
+                    if r.get('payload', {}).get('tipo') == 'imagen'
+                ]
 
-                if top_image:
-                    match_path = top_image['payload'].get('imagen_path', '')
-                    if match_path and os.path.exists(match_path):
-                        match_mv = self.procesador.generar_embedding_imagen(match_path)
+                ids_rechazados = set()
+                for img_result in imagenes_a_verificar:
+                    match_path = img_result['payload'].get('imagen_path', '')
+                    if not match_path or not os.path.exists(match_path):
+                        continue
 
-                        if match_mv is not None:
-                            sim_matrix = np.dot(query_mv, match_mv.T)
-                            maxsim_directo = float(np.sum(np.max(sim_matrix, axis=1)))
+                    match_mv = self.procesador.generar_embedding_imagen(match_path)
+                    if match_mv is None:
+                        continue
 
-                            match_name = os.path.basename(match_path)
-                            qdrant_score = top_image.get('score', 0.0)
+                    sim_matrix = np.dot(query_mv, match_mv.T)
+                    maxsim_directo = float(np.sum(np.max(sim_matrix, axis=1)))
 
-                            print(f"\n   🔬 VERIFICACIÓN EMBEDDINGS: query vs {match_name}")
-                            print(f"      MaxSim directo (mismo modelo): {maxsim_directo:.2f}")
-                            print(f"      Score Qdrant (índice):         {qdrant_score:.2f}")
-                            print(f"      Umbral verificación:           {UMBRAL_VERIFICACION:.2f}")
+                    match_name = os.path.basename(match_path)
+                    qdrant_score = img_result.get('score', 0.0)
 
-                            if maxsim_directo < UMBRAL_VERIFICACION:
-                                print(f"      ❌ Tejido NO coincide semánticamente → score bajo (score: {maxsim_directo:.2f})")
-                                has_rejected = True
-                                resultados = [r for r in resultados if r.get('payload', {}).get('tipo') != 'imagen']
-                            elif maxsim_directo >= HIGH_CONFIDENCE_THRESHOLD:
-                                print(f"      ✅ Match confirmado con alta confianza (score: {maxsim_directo:.2f} >= {HIGH_CONFIDENCE_THRESHOLD}), verificación visual omitida")
-                            else:
-                                print(f"      ✅ Tejido coincide semánticamente (score: {maxsim_directo:.2f}). Ejecutando Verificación Visual estricta...")
-                                dhash_sim = self._verificar_match_visual(state['imagen_consulta'], match_path)
-                                print(f"         Similitud visual (dHash): {dhash_sim:.4f} (umbral: 0.70)")
+                    print(f"\n   🔬 VERIFICACIÓN EMBEDDINGS: query vs {match_name}")
+                    print(f"      MaxSim directo (mismo modelo): {maxsim_directo:.2f}")
+                    print(f"      Score Qdrant (índice):         {qdrant_score:.2f}")
+                    print(f"      Umbral verificación:           {UMBRAL_VERIFICACION:.2f}")
 
-                                if dhash_sim < 0.70:
-                                    print(f"         ❌ RECHAZADO: Falso positivo de ColPali. Visualmente son tinturas/imágenes distintas.")
-                                    has_rejected = True
-                                    resultados = [r for r in resultados if r.get('payload', {}).get('tipo') != 'imagen']
-                                else:
-                                    print(f"         ✅ Match visual confirmado")
+                    if maxsim_directo < UMBRAL_VERIFICACION:
+                        print(f"      ❌ Tejido NO coincide semánticamente → score bajo (score: {maxsim_directo:.2f})")
+                        ids_rechazados.add(img_result['id'])
+                    elif maxsim_directo >= HIGH_CONFIDENCE_THRESHOLD:
+                        print(f"      ✅ Match confirmado con alta confianza (score: {maxsim_directo:.2f} >= {HIGH_CONFIDENCE_THRESHOLD}), verificación visual omitida")
+                    else:
+                        print(f"      ✅ Tejido coincide semánticamente (score: {maxsim_directo:.2f}). Ejecutando Verificación Visual estricta...")
+                        dhash_sim = self._verificar_match_visual(state['imagen_consulta'], match_path)
+                        print(f"         Similitud visual (dHash): {dhash_sim:.4f} (umbral: 0.70)")
+
+                        if dhash_sim < 0.70:
+                            print(f"         ❌ RECHAZADO: Falso positivo de ColPali. Visualmente son tinturas/imágenes distintas.")
+                            ids_rechazados.add(img_result['id'])
+                        else:
+                            print(f"         ✅ Match visual confirmado")
+
+                if ids_rechazados:
+                    resultados = [r for r in resultados if r.get('id') not in ids_rechazados]
+                    has_rejected = len(ids_rechazados) > 0 and len([r for r in resultados if r.get('payload', {}).get('tipo') == 'imagen']) == 0
+                    print(f"      🗑️ {len(ids_rechazados)} imagen(es) rechazada(s) por verificación visual")
 
         # ── PATH 2: Consulta_Imagen_Texto ───────────────────────────────
         # Estrategia: usar MUVERA para identificar el documento relevante,
