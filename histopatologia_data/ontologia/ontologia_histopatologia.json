@@ -3,14 +3,13 @@
     "Testículo",
     "Gónadas masculinas",
     "Túnica albugínea",
-    "Lobulillos",
     "Túbulos seminíferos",
+    "Lobulillos",
     "Intersticio testicular",
     "Estroma de tejido conectivo laxo",
     "Vasos sanguíneos"
   ],
   "TERMINOLOGÍA HISTOLÓGICA": [
-    "Células germinales",
     "Espermatogonias A claras",
     "Espermatogonias A oscuras",
     "Espermatogonias B",
@@ -25,9 +24,8 @@
   ],
   "TÉCNICAS Y TINCIONES": [
     "Hematoxilina-Eosina",
-    "Fijación: Bouin",
-    "Magnificación: 40x",
-    "Código interno: #RS001"
+    "Fijación de Bouin",
+    "Tinción HE"
   ],
   "FIGURAS": [
     {
@@ -44,7 +42,7 @@
     },
     {
       "número": 13,
-      "descripción": "Espermatogonia A Oscura"
+      "descripción": "Espermatogonia A oscura"
     },
     {
       "número": 14,
@@ -52,7 +50,7 @@
     },
     {
       "número": 15,
-      "descripción": "Espermatocito"
+      "descripción": "Espermatocito primario en paquinema"
     },
     {
       "número": 16,
@@ -65,7 +63,7 @@
   ],
   "PATOLOGÍAS": [],
   "metadata": {
-    "fecha": "2026-04-30 14:23:19",
+    "fecha": "2026-04-30 19:24:33",
     "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
     "num_imagenes": 13
   }

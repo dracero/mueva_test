@@ -748,6 +748,17 @@ class GestorQdrantMuvera:
                 field_name="numero_pagina",
                 field_schema=PayloadSchemaType.INTEGER
             )
+            # Índice keyword para filtrar por nombre de archivo
+            await client.create_payload_index(
+                collection_name=self.content_mv_collection,
+                field_name="nombre_archivo",
+                field_schema=PayloadSchemaType.KEYWORD
+            )
+            await client.create_payload_index(
+                collection_name=self.content_fde_collection,
+                field_name="nombre_archivo",
+                field_schema=PayloadSchemaType.KEYWORD
+            )
         except Exception as e:
             # Si ya existe, Qdrant podría lanzar un error o ignorarlo silenciosamente según la versión
             pass
