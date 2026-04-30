@@ -1325,11 +1325,26 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
 
     async def _nodo_optimizar_consulta(self, state: AgentState) -> AgentState:
         messages = [
-            SystemMessage(content="Optimiza consultas para búsqueda RAG multimodal."),
-            HumanMessage(content=f"CONSULTA ORIGINAL: {state['consulta_usuario']}\nCONTEXTO ONTOLÓGICO: {state['contexto_ontologico'][:500]}")
+            SystemMessage(content="""Eres un optimizador de consultas para un sistema RAG de histopatología.
+Tu ÚNICA tarea es reformular la consulta del usuario en términos de búsqueda precisos.
+
+REGLAS ESTRICTAS:
+1. Responde SOLAMENTE con la consulta optimizada, SIN explicaciones ni texto adicional.
+2. Enfócate EXCLUSIVAMENTE en el tema de la consulta actual.
+3. Usa terminología histológica precisa cuando sea apropiado.
+4. NO incluyas frases como "Aquí está la consulta optimizada" o "Sugiero buscar".
+5. La salida debe ser SOLO los términos de búsqueda, nada más.
+6. Si la consulta pide imágenes, enfócate en el TEMA (tejido/órgano/estructura), no en la palabra "imagen".
+
+Ejemplo:
+- Consulta: "mostrame imagenes de arterias" → "arterias histología corte transversal túnica íntima media adventicia"
+- Consulta: "qué es el epitelio estratificado" → "epitelio estratificado clasificación características capas celulares"
+"""),
+            HumanMessage(content=f"CONSULTA: {state['consulta_usuario']}\nCONTEXTO ONTOLÓGICO: {state['contexto_ontologico'][:500]}")
         ]
         response = await self.llm.ainvoke(messages)
-        state["consulta_optimizada"] = response.content
+        state["consulta_optimizada"] = response.content.strip()
+        print(f"   🔧 Consulta optimizada: {state['consulta_optimizada'][:200]}")
         state["trayectoria"].append({"nodo": "optimizar_consulta", "timestamp": time.time()})
         return state
 
@@ -1385,6 +1400,9 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
         resultados = []
         has_rejected = False
         state["abortar_reset"] = False  # Default
+
+        print(f"   📝 Consulta original: {state['consulta_usuario'][:150]}")
+        print(f"   📝 Consulta optimizada: {state['consulta_optimizada'][:200]}")
 
         requiere_imagen = state.get('requiere_imagen', False)
         tiene_imagen_adjunta = (
@@ -1550,6 +1568,14 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
 
                 # Paso 4: Rerank las etiquetas por similitud semántica con la consulta
                 # Esto determina CUÁLES imágenes son relevantes para la consulta
+                # IMPORTANTE: Usar embedding de la consulta ORIGINAL del usuario para el rerank,
+                # no la consulta optimizada, para evitar contaminación del optimizador LLM.
+                query_mv_para_rerank = self.procesador.generar_embedding_texto(state['consulta_usuario'])
+                if query_mv_para_rerank is None:
+                    query_mv_para_rerank = query_mv  # Fallback a la optimizada
+                else:
+                    print(f"   🎯 Usando embedding de consulta original para rerank de etiquetas")
+
                 etiquetas_rankeadas = []
                 if paginas_con_etiqueta:
                     for pg, etiquetas in paginas_con_etiqueta.items():
@@ -1557,8 +1583,8 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
                             texto_etiqueta = f"Imagen {et['numero']}: {et['descripcion']}"
                             emb = self.procesador.generar_embedding_texto(texto_etiqueta)
                             if emb is not None:
-                                # Calcular similitud con la consulta
-                                q = np.asarray(query_mv, dtype=np.float64)
+                                # Calcular similitud con la consulta ORIGINAL
+                                q = np.asarray(query_mv_para_rerank, dtype=np.float64)
                                 if q.ndim == 2:
                                     q_mean = q.mean(axis=0)
                                 else:
