@@ -1425,7 +1425,8 @@ Ejemplo:
         if tiene_imagen_adjunta:
             print("\n🔍 [Path 3 — Consulta_Imagen_Upload] Búsqueda con embedding de imagen")
             query_mv = self.procesador.generar_embedding_imagen(state['imagen_consulta'])
-            umbral_busqueda = Config.SEARCH_SCORE_THRESHOLD
+            # Queremos buscar sin umbral estricto inicial, para que llegue a verificación
+            umbral_busqueda = 0.0
 
             if query_mv is not None:
                 t0 = time.time()
@@ -1454,7 +1455,7 @@ Ejemplo:
                     print("⚠️ VERIFICATION_THRESHOLD inválido, usando default 830")
                     UMBRAL_VERIFICACION = 830.0
 
-                HIGH_CONFIDENCE_THRESHOLD = 890.0
+                HIGH_CONFIDENCE_THRESHOLD = 900.0
 
                 imagenes_a_verificar = [
                     r for r in resultados
@@ -1500,8 +1501,14 @@ Ejemplo:
 
                 if ids_rechazados:
                     resultados = [r for r in resultados if r.get('id') not in ids_rechazados]
-                    has_rejected = len(ids_rechazados) > 0 and len([r for r in resultados if r.get('payload', {}).get('tipo') == 'imagen']) == 0
                     print(f"      🗑️ {len(ids_rechazados)} imagen(es) rechazada(s) por verificación visual")
+                    if len([r for r in resultados if r.get('payload', {}).get('tipo') == 'imagen']) == 0:
+                        print("      🛑 Todas las imágenes fueron rechazadas por los umbrales de seguridad.")
+                        has_rejected = True
+                
+                # En el caso de subida de imagen, si no hay imágenes válidas, debe fallar.
+                if len([r for r in resultados if r.get('payload', {}).get('tipo') == 'imagen']) == 0:
+                    has_rejected = True
 
         # ── PATH 2: Consulta_Imagen_Texto ───────────────────────────────
         # Estrategia: usar MUVERA para identificar el documento relevante,
