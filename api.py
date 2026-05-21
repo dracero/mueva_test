@@ -8,6 +8,11 @@ Backend FastAPI para servir el asistente RAG ultimodal a CopilotKit.
 import os
 import uvicorn
 import shutil
+import warnings
+warnings.filterwarnings("ignore", message=".*is not compatible with the current PyTorch installation.*")
+warnings.filterwarnings("ignore", category=UserWarning, module="torch.cuda")
+
+from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,26 +23,12 @@ load_dotenv()
 
 from fastapi.staticfiles import StaticFiles
 
-app = FastAPI()
-
-# Mount static directory for images
-os.makedirs("histopatologia_data/embeddings", exist_ok=True)
-app.mount("/histopatologia_data", StaticFiles(directory="histopatologia_data"), name="histopatologia_data")
-
-# Configurar CORS para permitir requests del frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:4321", "http://127.0.0.1:4321"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 # Inicializar el asistente
 asistente = AsistenteHistologiaMultimodal()
 
-@app.on_event("startup")
-async def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler (replaces deprecated on_event('startup'))"""
     print("🚀 Iniciando backend y cargando modelos...")
     
     # Limpiar directorio de uploads al inicio para evitar "memoria" de imágenes anteriores
@@ -95,6 +86,23 @@ async def startup_event():
         import traceback
         print(f"❌ Error en auto-indexación:\n{traceback.format_exc()}")
 
+    yield  # Application runs here
+
+app = FastAPI(lifespan=lifespan)
+
+# Mount static directory for images
+os.makedirs("histopatologia_data/embeddings", exist_ok=True)
+app.mount("/histopatologia_data", StaticFiles(directory="histopatologia_data"), name="histopatologia_data")
+
+# Configurar CORS para permitir requests del frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:4321", "http://127.0.0.1:4321"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/health")
 def health():
     """Health check endpoint."""
@@ -125,10 +133,12 @@ async def chat_handler(query: str, image_path: str = None, image_base64: str = N
     if imagenes is None:
         imagenes = []
     
-    # Only show images if the user explicitly requested them or uploaded one
+    # Only show DB images if the user requested them via text (e.g. "mostrá epitelio").
+    # When the user *uploaded* an image for identification, don't return DB images —
+    # the frontend already shows the uploaded image in the user's message bubble.
     requiere_imagen = final_state.get("requiere_imagen", False)
     tiene_imagen_adjunta = bool(final_state.get("imagen_consulta"))
-    mostrar_imagenes = (requiere_imagen or tiene_imagen_adjunta) and len(imagenes) > 0
+    mostrar_imagenes = requiere_imagen and not tiene_imagen_adjunta and len(imagenes) > 0
     
     return response_text, imagenes, mostrar_imagenes
 

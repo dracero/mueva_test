@@ -1,70 +1,69 @@
 {
-  "SISTEMAS ANATÓMICOS": [
-    "Testículo",
-    "Gónadas masculinas",
-    "Túnica albugínea",
-    "Lobulillos",
-    "Túbulos seminíferos",
-    "Epitelio seminífero",
-    "Intersticio testicular",
-    "Estroma de tejido conectivo laxo"
+  "sistemas_anatomicos": [
+    "Esófago",
+    "Timo",
+    "Arteria muscular",
+    "Vasos sanguíneos",
+    "Tejido conectivo",
+    "Músculo liso",
+    "Endotelio"
   ],
-  "TERMINOLOGÍA HISTOLÓGICA": [
-    "Células germinales",
-    "Espermatogonias A claras",
-    "Espermatogonias A oscuras",
-    "Espermatogonias B",
-    "Espermatocitos primarios",
-    "Espermatocitos secundarios",
-    "Espermátides inmaduras",
-    "Espermátides maduras",
-    "Células de Sertoli",
-    "Células peritubulares o mioides",
-    "Células de Leydig o intersticiales"
+  "terminologia_histologica": [
+    "Células endoteliales",
+    "Músculo liso",
+    "Fibroblastos",
+    "Fibrocitos",
+    "Fibras colágenas",
+    "Lámina elástica interna",
+    "Lámina elástica externa",
+    "Túnica íntima",
+    "Túnica media",
+    "Túnica adventicia"
   ],
-  "TÉCNICAS Y TINCIONES": [
-    "Hematoxilina-Eosina",
-    "Fijación de Bouin",
-    "Tinción HE"
-  ],
-  "FIGURAS": [
+  "tecnicas_y_tinciones": [
     {
-      "número": 10,
-      "descripción": "Vista panorámica del parénquima testicular a 40x"
-    },
-    {
-      "número": 11,
-      "descripción": "Vista de mayor aumento de un túbulo seminífero en corte transversal"
-    },
-    {
-      "número": 12,
-      "descripción": "Espermatogonia A clara"
-    },
-    {
-      "número": 13,
-      "descripción": "Espermatogonia A Oscura"
-    },
-    {
-      "número": 14,
-      "descripción": "Espermatogonia B"
-    },
-    {
-      "número": 15,
-      "descripción": "Espermatocito"
-    },
-    {
-      "número": 16,
-      "descripción": "Espermatocito secundario"
-    },
-    {
-      "número": 17,
-      "descripción": "Espermatide temprana"
+      "técnica": "Hematoxilina-Eosina (H&E)",
+      "descripcion": "Tinción histológica"
     }
   ],
-  "PATOLOGÍAS": [],
+  "figuras": [
+    {
+      "numero": 1,
+      "descripcion": "Arteria muscular en corte transversal"
+    },
+    {
+      "numero": 2,
+      "descripcion": "Arteria muscular en corte transversal, detalle histológico"
+    },
+    {
+      "numero": 3,
+      "descripcion": "Esófago"
+    },
+    {
+      "numero": 4,
+      "descripcion": "Arteria muscular pequeña en corte longitudinal"
+    },
+    {
+      "numero": 5,
+      "descripcion": "Detalle de otra incidencia de corte (corte longitudinal)"
+    },
+    {
+      "numero": 6,
+      "descripcion": "Corte transversal – comparación con otros vasos sanguíneos"
+    },
+    {
+      "numero": 7,
+      "descripcion": "Corte oblicuo de una arteria muscular pequeña"
+    },
+    {
+      "numero": 8,
+      "descripcion": "Corte transversal de una arteria muscular – con láminas elásticas interna y externa"
+    }
+  ],
+  "patologias": [],
   "metadata": {
-    "fecha": "2026-05-01 17:22:38",
+    "fecha": "2026-05-21 18:06:41",
     "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
-    "num_imagenes": 13
+    "num_imagenes": 8
   }
 }

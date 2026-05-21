@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "backend": "uv run api.py",
+    "backend": ".venv/bin/python api.py",
     "frontend": "npm run dev --prefix frontend",
     "dev": "concurrently \"npm run backend\" \"npm run frontend\""
   },

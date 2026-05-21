@@ -337,21 +337,37 @@ class ProcesadorColPaliPuro:
             # Limpiar VRAM antes de cargar para maximizar espacio disponible
             cleanup_memory()
 
+            # Forzar kernels genéricos para máxima compatibilidad con GPUs nuevas (Blackwell sm_120)
+            if torch.cuda.is_available():
+                torch.backends.cuda.enable_math_sdp(True)
+                torch.backends.cuda.enable_flash_sdp(False)
+                torch.backends.cuda.enable_mem_efficient_sdp(False)
+                torch.backends.cudnn.enabled = False
+
+            quantization_config = None
             if bits == 4:
                 quantization_config = BitsAndBytesConfig(
                     load_in_4bit=True,
                     bnb_4bit_compute_dtype=torch.float16,
                     bnb_4bit_quant_type="nf4"
                 )
-            else:
+            elif bits == 8:
                 quantization_config = BitsAndBytesConfig(
                     load_in_8bit=True,
                 )
+            
+            kwargs = {
+                "device_map": "auto",
+                "low_cpu_mem_usage": True,
+            }
+            if quantization_config is not None:
+                kwargs["quantization_config"] = quantization_config
+            else:
+                kwargs["torch_dtype"] = torch.bfloat16
+
             self.colpali_model = ColPaliModel.from_pretrained(
                 "vidore/colpali-v1.2",
-                quantization_config=quantization_config,
-                device_map="auto",           # auto-split GPU/CPU si no cabe
-                low_cpu_mem_usage=True,       # carga eficiente de shards
+                **kwargs
             )
             self.colpali_processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.2")
             self.colpali_model.eval()
@@ -1438,6 +1454,7 @@ Ejemplo:
                     query_mv, query_fde,
                     min_score=umbral_busqueda,
                     figuras_filtro=figuras_en_consulta,
+                    filtro_tipo="imagen",
                 )
                 t2 = time.time()
                 print(f"⏱️ Tiempos: FDE={(t1-t0):.2f}s | Búsqueda+Rerank={(t2-t1):.2f}s")
@@ -1455,7 +1472,6 @@ Ejemplo:
                     print("⚠️ VERIFICATION_THRESHOLD inválido, usando default 830")
                     UMBRAL_VERIFICACION = 830.0
 
-                HIGH_CONFIDENCE_THRESHOLD = 900.0
 
                 imagenes_a_verificar = [
                     r for r in resultados
@@ -1486,18 +1502,21 @@ Ejemplo:
                     if maxsim_directo < UMBRAL_VERIFICACION:
                         print(f"      ❌ Tejido NO coincide semánticamente → score bajo (score: {maxsim_directo:.2f})")
                         ids_rechazados.add(img_result['id'])
-                    elif maxsim_directo >= HIGH_CONFIDENCE_THRESHOLD:
-                        print(f"      ✅ Match confirmado con alta confianza (score: {maxsim_directo:.2f} >= {HIGH_CONFIDENCE_THRESHOLD}), verificación visual omitida")
                     else:
-                        print(f"      ✅ Tejido coincide semánticamente (score: {maxsim_directo:.2f}). Ejecutando Verificación Visual estricta...")
+                        # SIEMPRE verificar visualmente con dHash, sin importar el score.
+                        # Imágenes histológicas distintas pueden tener MaxSim alto (>900)
+                        # porque comparten estructuras celulares similares.
+                        # Solo el dHash confirma que es la MISMA imagen.
+                        print(f"      ✅ Tejido coincide semánticamente (score: {maxsim_directo:.2f}). Verificando visualmente...")
                         dhash_sim = self._verificar_match_visual(state['imagen_consulta'], match_path)
-                        print(f"         Similitud visual (dHash): {dhash_sim:.4f} (umbral: 0.70)")
+                        DHASH_THRESHOLD = 0.80
+                        print(f"         Similitud visual (dHash): {dhash_sim:.4f} (umbral: {DHASH_THRESHOLD})")
 
-                        if dhash_sim < 0.70:
-                            print(f"         ❌ RECHAZADO: Falso positivo de ColPali. Visualmente son tinturas/imágenes distintas.")
+                        if dhash_sim < DHASH_THRESHOLD:
+                            print(f"         ❌ RECHAZADO: No es la misma imagen (dHash {dhash_sim:.4f} < {DHASH_THRESHOLD})")
                             ids_rechazados.add(img_result['id'])
                         else:
-                            print(f"         ✅ Match visual confirmado")
+                            print(f"         ✅ Match visual confirmado — imagen idéntica en base de datos")
 
                 if ids_rechazados:
                     resultados = [r for r in resultados if r.get('id') not in ids_rechazados]
@@ -1699,7 +1718,7 @@ Ejemplo:
                             })
                     if candidatas_fallback:
                         imagenes_reranked = rerank_imagenes_por_caption(query_mv, candidatas_fallback, umbral=0.0)
-                        for r in imagenes_reranked[:3]:
+                        for r in imagenes_reranked[:1]:
                             img_path = r.get("payload", {}).get("imagen_path", "")
                             caption = r.get("payload", {}).get("texto", "") or r.get("payload", {}).get("contexto_texto", "")
                             if img_path and os.path.exists(img_path):
@@ -1710,8 +1729,8 @@ Ejemplo:
                                 print(f"      ✅ Imagen seleccionada (fallback): {os.path.basename(img_path)}")
 
                 if imagenes_encontradas:
-                    state["imagenes_relevantes"] = imagenes_encontradas
-                    print(f"   📋 {len(imagenes_encontradas)} imágenes relevantes recuperadas.")
+                    state["imagenes_relevantes"] = imagenes_encontradas[:1]  # Solo la mejor
+                    print(f"   📋 1 imagen relevante seleccionada (de {len(imagenes_encontradas)} candidatas).")
                 else:
                     state["imagenes_relevantes"] = []
                     print(f"   📋 No se encontraron imágenes relevantes.")
@@ -1793,16 +1812,10 @@ Ejemplo:
                         contextos.append(f"[RESULTADO PRINCIPAL - IMAGEN - Score: {score:.2f} - Fuente: {pdf_name} (Pg {page_num})]\nArchivo: {os.path.basename(img_path)}\nFiguras en esta página: {figuras_str}\nTexto asociado a esta imagen: {contexto_texto[:600]}")
 
             state["contexto_documentos"] = "\n\n---\n\n".join(contextos)
-            # Preservar imágenes encontradas por etiqueta en Path 2
+            # Solo la imagen con mayor score
             if not state.get("imagenes_relevantes"):
-                state["imagenes_relevantes"] = imagenes
-            else:
-                # Agregar imágenes de resultados sin duplicar
-                existing_paths = {i["path"] if isinstance(i, dict) else i for i in state["imagenes_relevantes"]}
-                for img in imagenes:
-                    path = img["path"] if isinstance(img, dict) else img
-                    if path not in existing_paths:
-                        state["imagenes_relevantes"].append(img)
+                state["imagenes_relevantes"] = imagenes[:1]
+            # Si Path 2 ya seleccionó una, no agregar más
 
         state["trayectoria"].append({"nodo": "buscar", "timestamp": time.time()})
         return state
@@ -2458,7 +2471,13 @@ class AsistenteHistologiaMultimodal(SistemaRAGColPaliPuro):
             return {"pages": []}
 
         query_fde = self.procesador.generar_fde_muvera(query_mv)
-        res, _ = await self.gestor_qdrant.buscar_muvera_2stage(query_mv, query_fde, top_k, prefetch_multiplier)
+        res, _ = await self.gestor_qdrant.buscar_muvera_2stage(
+            query_mv,
+            query_fde,
+            top_k=top_k,
+            prefetch_multiplier=prefetch_multiplier,
+            filtro_tipo="imagen" if image_path else None
+        )
         return {"pages": res}
 
 # ============================================================================

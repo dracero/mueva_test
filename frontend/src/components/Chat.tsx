@@ -13,6 +13,7 @@ interface Message {
 
 function getImageUrl(img: ImageItem | string): string {
     const path = typeof img === "string" ? img : img.path;
+    if (path.startsWith("data:")) return path;
     return `http://127.0.0.1:8000/${path}`;
 }
 
@@ -34,7 +35,11 @@ export function Chat() {
     const handleSend = async () => {
         if (!input.trim() || isLoading) return;
 
-        const userMessage: Message = { role: "user", content: input };
+        const userMessage: Message = {
+            role: "user",
+            content: input,
+            images: imagePreview ? [imagePreview] : undefined,
+        };
         setMessages((prev) => [...prev, userMessage]);
         setInput("");
         setIsLoading(true);
