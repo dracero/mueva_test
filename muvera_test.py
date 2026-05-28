@@ -1069,11 +1069,7 @@ def rerank_imagenes_por_caption(
     candidatas: List[Dict],
     umbral: float = 0.45,
 ) -> List[Dict]:
-    """Re-rankea imágenes candidatas por similitud coseno con la consulta.
-
-    Calcula la similitud coseno entre el embedding medio de la consulta y el
-    embedding medio del caption de cada candidata.  Filtra por ``umbral`` y
-    retorna las candidatas ordenadas por similitud descendente.
+    """Re-rankea imágenes candidatas por similitud MaxSim (Late Interaction) con la consulta.
 
     Cada candidata debe tener una clave ``caption_embedding`` con el
     multi-vector embedding (array 2-D).
@@ -1081,14 +1077,7 @@ def rerank_imagenes_por_caption(
     if len(candidatas) == 0:
         return []
 
-    # Embedding medio de la consulta
     q = np.asarray(query_embedding, dtype=np.float64)
-    if q.ndim == 2:
-        q = q.mean(axis=0)
-    q_norm = np.linalg.norm(q)
-    if q_norm == 0:
-        return []
-    q = q / q_norm
 
     scored: List[Tuple[float, Dict]] = []
     for cand in candidatas:
@@ -1096,13 +1085,20 @@ def rerank_imagenes_por_caption(
         if emb is None:
             continue
         c = np.asarray(emb, dtype=np.float64)
-        if c.ndim == 2:
-            c = c.mean(axis=0)
-        c_norm = np.linalg.norm(c)
-        if c_norm == 0:
-            continue
-        c = c / c_norm
-        sim = float(np.dot(q, c))
+        
+        # MaxSim (Late Interaction)
+        if q.ndim == 2 and c.ndim == 2:
+            sim_matrix = np.dot(q, c.T)
+            sim = float(np.sum(np.max(sim_matrix, axis=1)))
+        else:
+            q_mean = q.mean(axis=0) if q.ndim == 2 else q
+            c_mean = c.mean(axis=0) if c.ndim == 2 else c
+            q_norm = np.linalg.norm(q_mean)
+            c_norm = np.linalg.norm(c_mean)
+            q_mean = q_mean / q_norm if q_norm > 0 else q_mean
+            c_mean = c_mean / c_norm if c_norm > 0 else c_mean
+            sim = float(np.dot(q_mean, c_mean))
+
         img_name = os.path.basename(cand.get("payload", {}).get("imagen_path", "?"))
         if sim >= umbral:
             scored.append((sim, cand))
@@ -1133,6 +1129,7 @@ class AgentState(TypedDict):
     """Estado del sistema de agentes"""
     messages: Annotated[list, add_messages]
     consulta_usuario: str
+    consulta_resuelta: str
     imagen_consulta: Optional[str]
     contexto_memoria: str
     ontologia: Dict
@@ -1301,6 +1298,39 @@ class SistemaRAGColPaliPuro:
         if history:
             print(f"   ✅ Memoria recuperada: {len(history)} caracteres")
             
+        # Resolución de correferencias y referencias contextuales
+        consulta_resuelta = state["consulta_usuario"]
+        if history and history.strip():
+            try:
+                print("   🔍 Resolviendo referencias contextuales de la consulta...")
+                prompt_resolucion = f"""Eres un experto en histopatología y lingüística. Tu tarea es resolver correferencias y referencias contextuales en la consulta actual del usuario utilizando el historial de conversación provisto.
+
+Si la consulta del usuario hace referencia a elementos anteriores (como 'la imagen', 'el tejido anterior', 'esta célula', 'el mismo órgano', 'él', 'ella', 'el de antes', 'la anterior', etc.), debes reescribir la consulta reemplazando esas referencias con los términos específicos mencionados en el historial (por ejemplo, 'bazo', 'espermátide tardía', 'arteria muscular', etc.).
+Si la consulta no contiene ninguna referencia contextual o el historial está vacío, debes devolver la consulta original exactamente igual.
+
+Historial de conversación:
+{history}
+
+Consulta actual del usuario: {state["consulta_usuario"]}
+
+Responde ÚNICAMENTE con la consulta reescrita, sin explicaciones, introducciones ni comentarios adicionales."""
+
+                messages = [
+                    SystemMessage(content="Eres un asistente que reescribe consultas para resolver correferencias basándose en el historial de chat. Tu respuesta debe ser estrictamente la consulta resuelta, nada más."),
+                    HumanMessage(content=prompt_resolucion)
+                ]
+                resolucion_response = await self.llm.ainvoke(messages)
+                resolved = resolucion_response.content.strip()
+                if resolved:
+                    if (resolved.startswith('"') and resolved.endswith('"')) or (resolved.startswith("'") and resolved.endswith("'")):
+                        resolved = resolved[1:-1].strip()
+                    consulta_resuelta = resolved
+                    print(f"   🎯 Consulta original: '{state['consulta_usuario']}'")
+                    print(f"   🎯 Consulta resuelta:   '{consulta_resuelta}'")
+            except Exception as e:
+                print(f"   ⚠️ Error resolviendo referencias: {e}")
+        
+        state["consulta_resuelta"] = consulta_resuelta
         state["trayectoria"].append({"nodo": "inicializar", "timestamp": time.time()})
         return state
 
@@ -1309,7 +1339,7 @@ class SistemaRAGColPaliPuro:
             state["contexto_ontologico"] = "No disponible"
             state["filtros_ontologia"] = []
         else:
-            terminos = self.extractor_ontologia.buscar_en_ontologia(state["consulta_usuario"], state["ontologia"])
+            terminos = self.extractor_ontologia.buscar_en_ontologia(state["consulta_resuelta"], state["ontologia"])
             state["contexto_ontologico"] = "\n".join(terminos)
             state["filtros_ontologia"] = [t.split(":")[1].strip() for t in terminos[:3]] if terminos else []
 
@@ -1367,7 +1397,7 @@ Ejemplo:
 - Consulta: "mostrame imagenes de arterias" → "arterias histología corte transversal túnica íntima media adventicia"
 - Consulta: "qué es el epitelio estratificado" → "epitelio estratificado clasificación características capas celulares"
 """),
-            HumanMessage(content=f"CONSULTA: {state['consulta_usuario']}\nCONTEXTO ONTOLÓGICO: {state['contexto_ontologico'][:500]}")
+            HumanMessage(content=f"CONSULTA: {state['consulta_resuelta']}\nCONTEXTO ONTOLÓGICO: {state['contexto_ontologico'][:500]}")
         ]
         response = await self.llm.ainvoke(messages)
         state["consulta_optimizada"] = response.content.strip()
@@ -1614,11 +1644,11 @@ Ejemplo:
                 # Esto determina CUÁLES imágenes son relevantes para la consulta
                 # IMPORTANTE: Usar embedding de la consulta ORIGINAL del usuario para el rerank,
                 # no la consulta optimizada, para evitar contaminación del optimizador LLM.
-                query_mv_para_rerank = self.procesador.generar_embedding_texto(state['consulta_usuario'])
+                query_mv_para_rerank = self.procesador.generar_embedding_texto(state['consulta_resuelta'])
                 if query_mv_para_rerank is None:
                     query_mv_para_rerank = query_mv  # Fallback a la optimizada
                 else:
-                    print(f"   🎯 Usando embedding de consulta original para rerank de etiquetas")
+                    print(f"   🎯 Usando embedding de consulta resuelta para rerank de etiquetas")
 
                 etiquetas_rankeadas = []
                 if paginas_con_etiqueta:
@@ -1627,24 +1657,21 @@ Ejemplo:
                             texto_etiqueta = f"Imagen {et['numero']}: {et['descripcion']}"
                             emb = self.procesador.generar_embedding_texto(texto_etiqueta)
                             if emb is not None:
-                                # Calcular similitud con la consulta ORIGINAL
+                                # Calcular similitud usando MaxSim (Late Interaction) de ColPali
                                 q = np.asarray(query_mv_para_rerank, dtype=np.float64)
-                                if q.ndim == 2:
-                                    q_mean = q.mean(axis=0)
-                                else:
-                                    q_mean = q
-                                q_norm = np.linalg.norm(q_mean)
-                                if q_norm > 0:
-                                    q_mean = q_mean / q_norm
                                 c = np.asarray(emb, dtype=np.float64)
-                                if c.ndim == 2:
-                                    c_mean = c.mean(axis=0)
+                                if q.ndim == 2 and c.ndim == 2:
+                                    sim_matrix = np.dot(q, c.T)
+                                    sim = float(np.sum(np.max(sim_matrix, axis=1)))
                                 else:
-                                    c_mean = c
-                                c_norm = np.linalg.norm(c_mean)
-                                if c_norm > 0:
-                                    c_mean = c_mean / c_norm
-                                sim = float(np.dot(q_mean, c_mean))
+                                    q_mean = q.mean(axis=0) if q.ndim == 2 else q
+                                    c_mean = c.mean(axis=0) if c.ndim == 2 else c
+                                    q_norm = np.linalg.norm(q_mean)
+                                    c_norm = np.linalg.norm(c_mean)
+                                    q_mean = q_mean / q_norm if q_norm > 0 else q_mean
+                                    c_mean = c_mean / c_norm if c_norm > 0 else c_mean
+                                    sim = float(np.dot(q_mean, c_mean))
+
                                 etiquetas_rankeadas.append({
                                     'pagina': pg,
                                     'numero': et['numero'],
@@ -2394,7 +2421,7 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
 
     async def procesar_consulta_estado(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> AgentState:
         initial_state = AgentState(
-            messages=[], consulta_usuario=consulta, imagen_consulta=imagen_path,
+            messages=[], consulta_usuario=consulta, consulta_resuelta="", imagen_consulta=imagen_path,
             imagen_base64=imagen_base64,
             contexto_memoria="", ontologia=self.ontologia or {}, contexto_ontologico="",
             clasificacion="", requiere_imagen=False, consulta_optimizada="", filtros_ontologia=[],

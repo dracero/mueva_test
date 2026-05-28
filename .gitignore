@@ -14,3 +14,9 @@ extracted_images_histologia/
 # System files
 .DS_Store
 *.log
+
+# Databases and local states
+*.sqlite
+
+# Uploads and temporary images
+uploads_archived/
