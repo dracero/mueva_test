@@ -699,12 +699,19 @@ class GestorQdrantMuvera:
     def client(self):
         """Cliente Qdrant cacheado"""
         if self._client is None:
-            self._client = AsyncQdrantClient(
-                url=self.url,
-                api_key=self.api_key,
-                timeout=120,
-                prefer_grpc=False
-            )
+            if self.url and (self.url.startswith("http://localhost") or self.url.startswith("127.0.0.1")):
+                self._client = AsyncQdrantClient(
+                    path="./local_qdrant",
+                    timeout=120,
+                    prefer_grpc=False
+                )
+            else:
+                self._client = AsyncQdrantClient(
+                    url=self.url,
+                    api_key=self.api_key,
+                    timeout=120,
+                    prefer_grpc=False
+                )
             print("🔗 Cliente Qdrant conectado")
         return self._client
 

@@ -75,8 +75,11 @@ async def main():
     print("="*80)
     
     # Verificar credenciales
-    if not QDRANT_URL or not QDRANT_KEY:
-        print("❌ Error: QDRANT_URL y QDRANT_KEY deben estar configuradas en .env")
+    if not QDRANT_URL:
+        print("❌ Error: QDRANT_URL debe estar configurada en .env")
+        sys.exit(1)
+    if not QDRANT_URL.startswith('http://localhost') and not QDRANT_KEY:
+        print("❌ Error: QDRANT_KEY debe estar configurada para nube en .env")
         sys.exit(1)
     
     print(f"\n📡 Qdrant URL: {QDRANT_URL[:50]}...")
