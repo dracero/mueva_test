@@ -1,142 +1,120 @@
-# 🔬 Histología RAG Multimodal
+# 🔬 MUVERA: RAG Multimodal de Histopatología v1.2
 
-Este proyecto es un sistema de **RAG (Retrieval-Augmented Generation) Multimodal** especializado en histopatología. Combina procesamiento de lenguaje natural avanzado con visión artificial para permitir consultas complejas sobre tejidos, órganos y muestras histológicas, utilizando una arquitectura de agentes inteligentes y una base de conocimientos derivada de documentos científicos (PDFs).
+Sistema avanzado de **Generación Aumentada por Recuperación (RAG) Multimodal** especializado en el análisis de imágenes y textos de histopatología. Utiliza una arquitectura de agentes orquestada con **LangGraph**, una base de datos vectorial **Qdrant** y el modelo de vanguardia **ColPali v1.2**.
 
-## 🚀 Arquitectura del Sistema
+## 🏗️ Arquitectura del Sistema
 
-El sistema se divide en tres capas principales que trabajan en conjunto para proporcionar respuestas precisas y visualmente verificadas.
+El sistema se divide en tres capas principales que garantizan una comunicación fluida y un procesamiento de alta precisión:
 
-```mermaid
-graph TD
-    subgraph Frontend ["Capas del Frontend (Astro + React)"]
-        UI[Interfaz de Chat]
-        IU[Gestión de Imágenes/Uploads]
-        IX[Control de Re-indexación]
-    end
+1.  **Frontend (React/A2UI)**: Interfaz moderna optimizada para la visualización de muestras histológicas. Permite la carga de imágenes en formato *raw* para evitar la degradación de datos que afectaría la precisión de los embeddings.
+2.  **Backend (FastAPI)**: Orquestador que maneja las peticiones REST, la gestión de archivos estáticos y la interfaz con el motor de IA.
+3.  **Capa de IA (MUVERA Core)**: Implementación de la lógica de recuperación y generación utilizando LangGraph.
 
-    subgraph Backend ["Capa de API (FastAPI)"]
-        API[Endpoints REST]
-        STATIC[Servidor de Archivos Estáticos]
-    end
+---
 
-    subgraph Agents ["Motor de Agentes (LangGraph)"]
-        node_rec["Recepcionar Consulta"]
-        node_init["Inicializar & Memoria"]
-        node_ont["Análisis Ontológico"]
-        node_class["Clasificador de Intención"]
-        node_opt["Optimizador de Query"]
-        node_search["Buscador Multimodal (MUVERA)"]
-        node_gen["Generador de Respuesta"]
-        
-        node_rec --> node_init --> node_ont --> node_class --> node_opt --> node_search
-        node_search --> node_gen
-    end
+## 🤖 Agentes y Flujo (LangGraph)
 
-    subgraph Infrastructure ["Infraestructura & Datos"]
-        Qdrant[(Qdrant Vector DB)]
-        Groq[Groq Llama 3/4]
-        SQLite[(SQLite Memory)]
-        ColPali[ColPali Embeddings]
-    end
+El "cerebro" del sistema es un grafo de estados que procesa las consultas a través de nodos especializados:
 
-    UI <--> API
-    API <--> node_rec
-    node_search <--> Qdrant
-    node_search <--> ColPali
-    node_ont <--> Groq
-    node_gen <--> Groq
-    node_init <--> SQLite
+### 1. `_nodo_buscar` (Retrieval)
+Este agente es responsable de entender la intención del usuario y recuperar la información más relevante:
+-   **Detección de Intento**: Clasifica si la consulta es de texto, de imagen o comparativa.
+-   **Recuperación Multimodal**: Realiza búsquedas simultáneas en Qdrant para encontrar chunks de texto y figuras visuales.
+-   **Lógica de Filtrado**: Aplica el umbral de verificación (`VERIFICATION_THRESHOLD`) para descartar resultados ruidosos.
+
+### 2. `_nodo_generar_respuesta` (Generation)
+Utiliza un modelo **Groq Llama-4 Scout** para sintetizar la respuesta final:
+-   **Razonamiento Médico**: Combina el contexto textual del manual con el análisis visual de las imágenes recuperadas.
+-   **Referencias Cruzadas**: Identifica estructuras específicas y las vincula con las figuras correspondientes (ej. "En la Imagen 12.1 se observa...").
+
+---
+
+## 📊 Bases de Datos y Vector Stores
+
+### **Qdrant: El Corazón Vectorial**
+Utilizamos Qdrant con una configuración de **Arquitectura Dual** para optimizar velocidad y precisión:
+-   **Colección FDE (Fixed Dimensional Encoding)**: Una representación comprimida de los embeddings para búsquedas iniciales ultrarrápidas (Stage 1).
+-   **Colección Multi-Vector (MaxSim)**: Almacena los embeddings completos de ColPali (128D por patch/token). Se utiliza para el re-ranking de precisión (Stage 2).
+
+### **ColPali v1.2: El Modelo Unificado**
+A diferencia de sistemas RAG tradicionales que usan modelos separados para texto e imagen, MUVERA utiliza **ColPali**:
+-   Mapea texto e imágenes al mismo espacio vectorial.
+-   Permite comparar una consulta textual directamente con "patches" de una imagen microscópica.
+-   Especialmente efectivo en documentos visuales complejos como atlas de histología.
+
+---
+
+## 🔍 Lógica de Recuperación de 3 Niveles
+
+Para garantizar que el sistema nunca muestre información incorrecta en un contexto médico, implementamos una verificación de tres niveles:
+
+| Nivel | Score (ColPali) | Acción | Verificación Adicional |
+| :--- | :--- | :--- | :--- |
+| **Alta Confianza** | `≥ 900` | **Aceptación Directa** | Ninguna (Match semántico fuerte). |
+| **Duda Razonable** | `830 - 900` | **Verificación dHash** | Se compara el hash perceptual (dHash) para confirmar identidad visual. |
+| **Baja Confianza** | `< 830` | **Rechazo Automático** | El sistema informa que no encontró la imagen específica. |
+
+> [!NOTE]
+> El **dHash (Difference Hash)** es crucial porque es robusto a cambios de brillo o compresión, permitiendo confirmar si una imagen recuperada es realmente la que el usuario está consultando, independientemente del score semántico.
+
+---
+
+## 🛠️ Configuración y Desarrollo
+
+### Requisitos Técnicos
+-   **GPU**: Recomendado 8GB+ VRAM (probado en RTX 3050 y GTX 1070).
+-   **Docker**: Requerido para ejecutar la base de datos vectorial localmente.
+-   **Backend**: Python 3.10+ (gestión con `uv`).
+-   **Frontend**: Node.js 18+.
+
+### Variables de Entorno Clave (`.env`)
+```env
+# Configuración de base de datos vectorial Qdrant Local
+QDRANT_URL="http://localhost:6333"
+QDRANT_KEY=""
+
+# Umbrales y parámetros de búsqueda
+SEARCH_SCORE_THRESHOLD=830   # Umbral base de rechazo
+VERIFICATION_THRESHOLD=830   # Umbral para disparo de dHash
+NORMALIZE_EMBEDDINGS=true    # Consistencia entre diferentes arquitecturas de GPU
+QUANTIZATION_BITS=8          # Precisión de los scores (8 o 4 bits)
 ```
 
 ---
 
-## 🧠 Funcionamiento de los Agentes
+## 🚀 Cómo Ejecutar
 
-El flujo de trabajo está orquestado por **LangGraph**, lo que permite una ejecución cíclica y condicional de tareas:
+El proyecto incluye scripts en `package.json` para facilitar la ejecución y el ciclo de desarrollo local:
 
-1.  **Recepción y Pre-procesamiento**: Captura el texto del usuario y maneja imágenes adjuntas (Base64), guardándolas temporalmente para su análisis visual.
-2.  **Contexto Semántico**: Recupera la memoria de la conversación actual desde **SQLite** y extrae términos técnicos utilizando una **Ontología Histológica** personalizada.
-3.  **Clasificación de Intención**: Determina si el usuario busca información teórica o si requiere explícitamente ver imágenes (micrografías).
-4.  **Optimización de Consulta**: Un LLM reformula la pregunta original en términos técnicos optimizados para la búsqueda en la base de datos vectorial.
-5.  **Búsqueda Multimodal (MUVERA)**: Ejecuta una de las tres estrategias de búsqueda según la necesidad (ver sección de Estrategias).
-6.  **Generación de Respuesta**: Sintetiza la información recuperada (texto + imágenes) para producir una respuesta coherente y científicamente válida.
+### 1. Iniciar la Base de Datos (Qdrant en Docker)
+```bash
+npm run docker:up
+```
+*Esto iniciará el contenedor local de Qdrant en segundo plano (puertos `6333` y `6334`), persistiendo los datos en `histopatologia_data/qdrant_storage/`.*
 
----
+### 2. Inicializar / Indexar la Base de Datos
+```bash
+uv run python init_db.py
+```
+*Este comando procesará los PDFs de `./pdfs/` y cargará los embeddings en la base de datos local.*
 
-## 🔍 Estrategias de Búsqueda (The 3 Paths)
+### 3. Ejecutar la Aplicación (Backend + Frontend)
+```bash
+npm run dev
+```
+*Este comando iniciará concurrentemente el servidor FastAPI en el puerto `8000` y el cliente frontend de Astro en el puerto `4321`.*
 
-El sistema implementa tres caminos críticos para la recuperación de información:
+### 4. Limpiar la Base de Datos (Opcional)
+Si deseas borrar las colecciones y reiniciar la base de datos de Qdrant de forma limpia:
+```bash
+npm run db:clear
+```
 
-### 1. Búsqueda de Texto Puro
-Utilizada para preguntas teóricas. Busca en los chunks de texto indexados en **Qdrant** y devuelve contexto textual para el LLM.
-
-### 2. Texto a Imagen (Label-based Semantic Matching)
-Cuando el usuario pide ver un tejido (ej: *"mostrame un corte de arteria"*):
-- Identifica el documento más relevante.
-- Realiza un *scroll* de todos los chunks de texto buscando etiquetas de figuras (ej: *"Imagen 15: Túnica íntima"*).
-- Mapea semánticamente la descripción de la etiqueta con la consulta del usuario.
-- Recupera y muestra la imagen asociada a esa etiqueta en la misma página del PDF.
-
-### 3. Imagen a Imagen (ColPali + Verificación 3-Tier)
-Cuando el usuario sube una imagen para buscar similares o identificarla:
-- **ColPali Embeddings**: Genera embeddings multimodales (late interaction) de la imagen subida.
-- **MUVERA Search**: Búsqueda en dos etapas (FDE + MV) en Qdrant.
-- **Verificación de Seguridad**:
-    - **Tier 1 (Rechazo)**: Si el score ColPali es < 830, se rechaza por falta de coincidencia semántica.
-    - **Tier 2 (DHash)**: Si el score está entre 830 y 900, se realiza una verificación visual estricta usando **Difference Hashing (dHash)** para descartar falsos positivos por color o textura.
-    - **Tier 3 (Aceptación)**: Si el score es >= 900, se acepta como match de alta confianza.
+### 5. Apagar la Base de Datos
+Para detener y eliminar el contenedor de Qdrant:
+```bash
+npm run docker:down
+```
 
 ---
-
-## 🛠️ Stack Tecnológico
-
-### Backend
-- **FastAPI**: Servidor de alta performance.
-- **LangGraph**: Orquestación de agentes cíclicos.
-- **Qdrant**: Base de datos vectorial para embeddings multimodales.
-- **ColPali**: Modelo de embeddings de última generación para documentos multimodales.
-- **Groq (Llama 3/4)**: Inferencia de lenguaje de ultra-baja latencia.
-
-### Frontend
-- **Astro**: Framework para una carga ultra rápida y arquitectura de islas.
-- **React**: Componentes dinámicos para el chat y la galería.
-- **Tailwind CSS**: Diseño moderno con temática histológica (verdes médicos) y efectos de glassmorphism.
-
----
-
-## 📦 Instalación y Configuración
-
-1.  **Clonar el repositorio**:
-    ```bash
-    git clone <repo_url>
-    cd mueva_test
-    ```
-
-2.  **Configurar el entorno**:
-    Crea un archivo `.env` basado en `.env.example` con tus credenciales de Groq y Qdrant.
-
-3.  **Instalar dependencias**:
-    ```bash
-    # Backend
-    uv pip install -r pyproject.toml
-    
-    # Frontend
-    cd frontend && npm install
-    ```
-
-4.  **Ejecutar el sistema**:
-    ```bash
-    # Terminal 1: Backend
-    python api.py
-    
-    # Terminal 2: Frontend
-    cd frontend && npm run dev
-    ```
-
----
-
-## 📂 Estructura de Datos
-- `pdfs/`: Directorio donde se deben colocar los documentos para indexar.
-- `histopatologia_data/`: Almacena los recortes de imágenes y metadatos extraídos de los PDFs.
-- `uploads/`: Almacén temporal para imágenes subidas por el usuario.
-- `chat_memory.sqlite`: Base de datos local para la persistencia de la memoria del asistente.
+*Desarrollado para el análisis avanzado de muestras histológicas mediante Inteligencia Artificial Agentica.*

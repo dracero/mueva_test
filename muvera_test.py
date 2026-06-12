@@ -43,6 +43,9 @@ from io import BytesIO
 from dotenv import load_dotenv
 load_dotenv()
 
+# Configurar allocator de CUDA antes de importar PyTorch para evitar fragmentación
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 # PDFs e imágenes
 from PyPDF2 import PdfReader
 from pdf2image import convert_from_path
@@ -115,11 +118,14 @@ class Config:
     TEXT_CHUNK_SIZE = 1000
     TEXT_CHUNK_OVERLAP = 100
     IMAGE_DPI = 200
-    MAX_IMAGE_SIZE = (1280, 1280)
+    
+    _max_img_size_val = int(os.getenv("MAX_IMAGE_SIZE", "1024"))
+    MAX_IMAGE_SIZE = (_max_img_size_val, _max_img_size_val)
 
     # Parámetros de memoria
-    BATCH_SIZE = 8
-    CLEAR_CACHE_AFTER_PROCESS = True
+    BATCH_SIZE = int(os.getenv("BATCH_SIZE", "4"))
+    CLEAR_CACHE_AFTER_PROCESS = os.getenv("CLEAR_CACHE_AFTER_PROCESS", "true").lower() == "true"
+    LAZY_LOAD_MODEL = os.getenv("LAZY_LOAD_MODEL", "true").lower() == "true"
 
     # Mejoras visuales
     ENHANCE_CONTRAST = True
@@ -147,7 +153,19 @@ class Config:
     TOP_K_RESULTS = int(os.getenv("TOP_K_RESULTS", "5"))
 
     # Cuantización: 8 = mejor precisión en scores (~870+), 4 = menos VRAM (~800 scores)
-    QUANTIZATION_BITS = int(os.getenv("QUANTIZATION_BITS", "8"))
+    # Autodetección si no se especifica en env o es una cadena vacía
+    _vram_gb = 0.0
+    if torch.cuda.is_available():
+        try:
+            _vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        except Exception:
+            pass
+    
+    _quant_env = os.getenv("QUANTIZATION_BITS")
+    if _quant_env is not None and _quant_env.strip() != "":
+        QUANTIZATION_BITS = int(_quant_env)
+    else:
+        QUANTIZATION_BITS = 4 if (_vram_gb > 0 and _vram_gb < 10.0) else 8
 
     @classmethod
     def setup_directories(cls):
@@ -171,10 +189,17 @@ def setup_langsmith():
 
 def cleanup_memory():
     """Liberar memoria GPU/CPU"""
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-        torch.cuda.synchronize()
-    gc.collect()
+    try:
+        if 'torch' in globals() and torch is not None and hasattr(torch, 'cuda') and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+    except Exception:
+        pass
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
 
 # ============================================================================
 # EXTRACTOR DE ONTOLOGÍA
@@ -326,44 +351,79 @@ class ProcesadorColPaliPuro:
     def __init__(self):
         print("\n🖼️ Inicializando ColPali Puro + MUVERA...")
 
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # Verificar compatibilidad real de la GPU con el binario de PyTorch
+        is_cuda_usable = False
+        if torch.cuda.is_available():
+            try:
+                # Intento de asignación simple para verificar compatibilidad de CUDA
+                torch.zeros(1, device="cuda")
+                is_cuda_usable = True
+            except Exception as e:
+                print(f"   ⚠️ ADVERTENCIA: CUDA está disponible pero no es compatible con tu GPU actual ({e}).")
+                print("   🔄 Realizando fallback automático a CPU.")
 
-        # SOLO ColPali - para texto E imágenes
+        self.device = "cuda" if is_cuda_usable else "cpu"
+        self.colpali_model = None
+        self.colpali_processor = None
+
+        if not Config.LAZY_LOAD_MODEL:
+            self._asegurar_modelo_cargado()
+        else:
+            print("   💤 Carga diferida (lazy loading) activada para ColPali. Se cargará en la primera consulta/indexación.")
+
+        # MUVERA configuration
+        print("   🚀 Inicializando MUVERA...")
+        self.muvera = Muvera(
+            dim=128,        # ColPali embedding dimensionality
+            k_sim=6,        # 64 clusters (2^6)
+            dim_proj=16,    # Compress to 16 dimensions per cluster
+            r_reps=20,      # 20 repetitions
+            random_seed=42,
+        )
+        print(f"   ✅ MUVERA inicializado (FDE: {Config.FDE_DIM}D)")
+
+    def _asegurar_modelo_cargado(self):
+        """Asegura que el modelo ColPali y su procesador estén cargados en memoria."""
+        if hasattr(self, 'colpali_model') and self.colpali_model is not None:
+            return
+
         bits = Config.QUANTIZATION_BITS
-        print(f"   📚 Cargando ColPali v1.2 ({bits}-bit, texto + imágenes)...")
+        print(f"\n   📚 [Lazy Load] Cargando ColPali v1.2 ({bits}-bit, texto + imágenes) en {self.device}...")
         try:
             from transformers import BitsAndBytesConfig
 
             # Limpiar VRAM antes de cargar para maximizar espacio disponible
             cleanup_memory()
 
-            # Forzar kernels genéricos para máxima compatibilidad con GPUs nuevas (Blackwell sm_120)
-            if torch.cuda.is_available():
+            # Forzar kernels genéricos para máxima compatibilidad con GPUs nuevas
+            if self.device == "cuda":
                 torch.backends.cuda.enable_math_sdp(True)
                 torch.backends.cuda.enable_flash_sdp(False)
                 torch.backends.cuda.enable_mem_efficient_sdp(False)
                 torch.backends.cudnn.enabled = False
 
             quantization_config = None
-            if bits == 4:
-                quantization_config = BitsAndBytesConfig(
-                    load_in_4bit=True,
-                    bnb_4bit_compute_dtype=torch.float16,
-                    bnb_4bit_quant_type="nf4"
-                )
-            elif bits == 8:
-                quantization_config = BitsAndBytesConfig(
-                    load_in_8bit=True,
-                )
+            if self.device == "cuda":
+                if bits == 4:
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_4bit=True,
+                        bnb_4bit_compute_dtype=torch.float16,
+                        bnb_4bit_quant_type="nf4"
+                    )
+                elif bits == 8:
+                    quantization_config = BitsAndBytesConfig(
+                        load_in_8bit=True,
+                    )
             
             kwargs = {
-                "device_map": "auto",
                 "low_cpu_mem_usage": True,
             }
-            if quantization_config is not None:
-                kwargs["quantization_config"] = quantization_config
+            if self.device == "cuda":
+                kwargs["device_map"] = "auto"
+                if quantization_config is not None:
+                    kwargs["quantization_config"] = quantization_config
             else:
-                kwargs["torch_dtype"] = torch.bfloat16
+                kwargs["torch_dtype"] = torch.float32
 
             self.colpali_model = ColPaliModel.from_pretrained(
                 "vidore/colpali-v1.2",
@@ -371,37 +431,30 @@ class ProcesadorColPaliPuro:
             )
             self.colpali_processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.2")
             self.colpali_model.eval()
-            print(f"   ✅ ColPali cargado ({bits}-bit, {Config.COLPALI_EMBEDDING_DIM}D multi-vector)")
+            print(f"   ✅ ColPali cargado ({bits}-bit en GPU, {Config.COLPALI_EMBEDDING_DIM}D multi-vector)" if self.device == "cuda" else f"   ✅ ColPali cargado (float32 en CPU, {Config.COLPALI_EMBEDDING_DIM}D multi-vector)")
         except Exception as e:
-            if bits == 8:
-                print(f"   ⚠️ Error con 8-bit, intentando fallback a 4-bit: {e}")
+            if self.device == "cuda":
+                print(f"   ⚠️ Error con GPU, intentando fallback completo a CPU: {e}")
+                self.device = "cpu"
+                if hasattr(self, 'colpali_model') and self.colpali_model is not None:
+                    del self.colpali_model
+                    self.colpali_model = None
+                cleanup_memory()
                 try:
-                    # Liberar la carga parcial del intento 8-bit
-                    if hasattr(self, 'colpali_model') and self.colpali_model is not None:
-                        del self.colpali_model
-                        self.colpali_model = None
-                    cleanup_memory()
-
-                    quantization_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_compute_dtype=torch.float16,
-                        bnb_4bit_quant_type="nf4"
-                    )
                     self.colpali_model = ColPaliModel.from_pretrained(
                         "vidore/colpali-v1.2",
-                        quantization_config=quantization_config,
-                        device_map="auto",
+                        torch_dtype=torch.float32,
                         low_cpu_mem_usage=True,
                     )
                     self.colpali_processor = ColPaliProcessor.from_pretrained("vidore/colpali-v1.2")
                     self.colpali_model.eval()
-                    print(f"   ✅ ColPali cargado (4-bit fallback, {Config.COLPALI_EMBEDDING_DIM}D multi-vector)")
+                    print(f"   ✅ ColPali cargado (float32 en CPU, {Config.COLPALI_EMBEDDING_DIM}D multi-vector)")
                 except Exception as e2:
-                    print(f"   ❌ Error cargando ColPali: {e2}")
+                    print(f"   ❌ Error cargando ColPali en CPU: {e2}")
                     self.colpali_model = None
                     self.colpali_processor = None
             else:
-                print(f"   ❌ Error cargando ColPali: {e}")
+                print(f"   ❌ Error cargando ColPali en CPU: {e}")
                 self.colpali_model = None
                 self.colpali_processor = None
 
@@ -515,18 +568,9 @@ class ProcesadorColPaliPuro:
                                 print(f"⚠️ Error procesando xref {xref} en página {page_num+1}: {e}")
                     else:
                         print(f"      ⚠️ Pg {page_num+1}: Imagen incrustada como vector o Form XObject. Omitiendo captura de pantalla para evitar imágenes de texto.")
-                    # Conservar SOLO la imagen más grande de la página
+                    # Conservar TODAS las imágenes válidas de la página (no solo la más grande)
                     if valid_images_this_page:
-                        largest_image = max(valid_images_this_page, key=lambda x: x["area"])
-                        
-                        for img_data in valid_images_this_page:
-                            if img_data["path"] != largest_image["path"]:
-                                try:
-                                    os.remove(img_data["path"])
-                                except OSError:
-                                    pass
-                                    
-                        page_images_with_pos.append(largest_image)
+                        page_images_with_pos.extend(valid_images_this_page)
                     
                     for idx, img_data in enumerate(page_images_with_pos):
                         img_data["img_index_in_page"] = idx
@@ -579,6 +623,7 @@ class ProcesadorColPaliPuro:
         """
         Genera embedding ColPali multi-vector para imagen
         """
+        self._asegurar_modelo_cargado()
         if self.colpali_model is None:
             print("⚠️ ColPali no disponible")
             return None
@@ -586,11 +631,33 @@ class ProcesadorColPaliPuro:
         try:
             image = self._preprocesar_imagen(imagen_path)
             
-            batch_images = self.colpali_processor.process_images([image])
-            batch_images = {k: v.to(self.colpali_model.device) for k, v in batch_images.items()}
+            # Intento inicial con try-except para recuperar de OOM
+            try:
+                batch_images = self.colpali_processor.process_images([image])
+                batch_images = {k: v.to(self.colpali_model.device) for k, v in batch_images.items()}
 
-            with torch.no_grad():
-                image_embeddings = self.colpali_model(**batch_images)
+                with torch.no_grad():
+                    image_embeddings = self.colpali_model(**batch_images)
+            except RuntimeError as e:
+                # Comprobar si es un error Out of Memory
+                if "out of memory" in str(e).lower():
+                    print("   ⚠️ CUDA OOM detectado durante la generación de embedding de imagen. Intentando recuperación...")
+                    cleanup_memory()
+                    
+                    # Reducir imagen a la mitad del tamaño e intentar de nuevo
+                    width, height = image.size
+                    new_width, new_height = width // 2, height // 2
+                    print(f"   🔄 Reduciendo tamaño de imagen para reintento: ({width}, {height}) -> ({new_width}, {new_height})")
+                    image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                    
+                    cleanup_memory()
+                    batch_images = self.colpali_processor.process_images([image])
+                    batch_images = {k: v.to(self.colpali_model.device) for k, v in batch_images.items()}
+                    
+                    with torch.no_grad():
+                        image_embeddings = self.colpali_model(**batch_images)
+                else:
+                    raise e
 
             # Multi-vector output (convertir tensor a numpy)
             multivector = image_embeddings[0].cpu().float().numpy()
@@ -609,27 +676,46 @@ class ProcesadorColPaliPuro:
                   f"| normalizado={Config.NORMALIZE_EMBEDDINGS}")
 
             del image, batch_images, image_embeddings
+            
+            # Liberación agresiva de caché
+            if Config.CLEAR_CACHE_AFTER_PROCESS:
+                cleanup_memory()
+                
             return multivector
 
         except Exception as e:
             print(f"❌ Error generando embedding imagen: {e}")
+            cleanup_memory()
             return None
 
     def generar_embedding_texto(self, texto: str) -> Optional[np.ndarray]:
         """
         Genera embedding ColPali multi-vector para TEXTO
         """
+        self._asegurar_modelo_cargado()
         if self.colpali_model is None:
             print("⚠️ ColPali no disponible")
             return None
 
         try:
             # ColPali procesa queries textuales
-            batch_queries = self.colpali_processor.process_queries([texto])
-            batch_queries = {k: v.to(self.colpali_model.device) for k, v in batch_queries.items()}
-            
-            with torch.no_grad():
-                text_embeddings = self.colpali_model(**batch_queries)
+            try:
+                batch_queries = self.colpali_processor.process_queries([texto])
+                batch_queries = {k: v.to(self.colpali_model.device) for k, v in batch_queries.items()}
+                
+                with torch.no_grad():
+                    text_embeddings = self.colpali_model(**batch_queries)
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    print("   ⚠️ CUDA OOM detectado durante la generación de embedding de texto. Reintentando tras limpiar caché...")
+                    cleanup_memory()
+                    batch_queries = self.colpali_processor.process_queries([texto])
+                    batch_queries = {k: v.to(self.colpali_model.device) for k, v in batch_queries.items()}
+                    
+                    with torch.no_grad():
+                        text_embeddings = self.colpali_model(**batch_queries)
+                else:
+                    raise e
             
             # Multi-vector output
             multivector = text_embeddings[0].cpu().float().numpy()
@@ -641,10 +727,16 @@ class ProcesadorColPaliPuro:
                 multivector = multivector / norms
 
             del batch_queries, text_embeddings
+            
+            # Liberación agresiva de caché
+            if Config.CLEAR_CACHE_AFTER_PROCESS:
+                cleanup_memory()
+                
             return multivector
 
         except Exception as e:
             print(f"❌ Error generando embedding texto: {e}")
+            cleanup_memory()
             return None
 
     def generar_fde_muvera(self, multivectors: np.ndarray) -> np.ndarray:
@@ -699,11 +791,13 @@ class GestorQdrantMuvera:
     def client(self):
         """Cliente Qdrant cacheado"""
         if self._client is None:
+            api_key = self.api_key if self.api_key else None
             self._client = AsyncQdrantClient(
                 url=self.url,
-                api_key=self.api_key,
+                api_key=api_key,
                 timeout=120,
-                prefer_grpc=False
+                prefer_grpc=False,
+                check_compatibility=False
             )
             print("🔗 Cliente Qdrant conectado")
         return self._client

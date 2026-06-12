@@ -5,9 +5,12 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "backend": ".venv/bin/python api.py",
+    "backend": "uv run api.py",
     "frontend": "npm run dev --prefix frontend",
-    "dev": "concurrently \"npm run backend\" \"npm run frontend\""
+    "dev": "mkdir -p histopatologia_data/embeddings histopatologia_data/cache histopatologia_data/ontologia && npm run docker:up && concurrently \"npm run backend\" \"npm run frontend\"",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "db:clear": "uv run python clear_db.py"
   },
   "keywords": [],
   "author": "",

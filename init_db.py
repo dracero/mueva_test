@@ -71,15 +71,15 @@ async def main():
     
     print("\n" + "="*80)
     print("🔬 HISTOLOGÍA RAG - INICIALIZACIÓN DE BASE DE DATOS")
-    print("   🧬 ColBERT + ColPali | 🚀 MUVERA | 📦 Qdrant Cloud")
+    print("   🧬 ColBERT + ColPali | 🚀 MUVERA | 📦 Qdrant Local/Cloud")
     print("="*80)
     
     # Verificar credenciales
-    if not QDRANT_URL or not QDRANT_KEY:
-        print("❌ Error: QDRANT_URL y QDRANT_KEY deben estar configuradas en .env")
+    if not QDRANT_URL:
+        print("❌ Error: QDRANT_URL debe estar configurada en .env")
         sys.exit(1)
     
-    print(f"\n📡 Qdrant URL: {QDRANT_URL[:50]}...")
+    print(f"\n📡 Qdrant URL: {QDRANT_URL}")
     
     # Buscar PDFs
     pdf_dir = Path("./pdfs")

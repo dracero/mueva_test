@@ -1,69 +1,83 @@
 {
   "sistemas_anatomicos": [
-    "Esófago",
-    "Timo",
-    "Arteria muscular",
-    "Vasos sanguíneos",
-    "Tejido conectivo",
-    "Músculo liso",
-    "Endotelio"
+    {
+      "organo": "Testículo",
+      "tejido": "Tejido testicular",
+      "estructuras": [
+        "Túbulos seminíferos",
+        "Lobulillos",
+        "Túnica albugínea",
+        "Intersticio testicular",
+        "Estroma de tejido conectivo laxo"
+      ]
+    }
   ],
-  "terminologia_histologica": [
-    "Células endoteliales",
-    "Músculo liso",
-    "Fibroblastos",
-    "Fibrocitos",
-    "Fibras colágenas",
-    "Lámina elástica interna",
-    "Lámina elástica externa",
-    "Túnica íntima",
-    "Túnica media",
-    "Túnica adventicia"
-  ],
+  "terminologia_histolologica": {
+    "tipos_celulares": [
+      "Espermatogonias A claras",
+      "Espermatogonias A oscuras",
+      "Espermatogonias B",
+      "Espermatocitos primarios",
+      "Espermatocitos secundarios",
+      "Espermatides inmaduras",
+      "Espermatides maduras",
+      "Células de Sertoli",
+      "Células de Leydig",
+      "Células peritubulares o mioides"
+    ],
+    "componentes_tisulares": [
+      "Epitelio seminífero",
+      "Lámina basal",
+      "Pared tubular",
+      "Citoplasma",
+      "Núcleo",
+      "Cromatina"
+    ]
+  },
   "tecnicas_y_tinciones": [
     {
-      "técnica": "Hematoxilina-Eosina (H&E)",
-      "descripcion": "Tinción histológica"
+      "metodo_procesamiento": "Fijación de Bouin",
+      "coloracion": "Hematoxilina-Eosina (HE)"
     }
   ],
   "figuras": [
     {
-      "numero": 1,
-      "descripcion": "Arteria muscular en corte transversal"
+      "numero": 10,
+      "descripcion": "Vista panorámica del parénquima testicular a 40x"
     },
     {
-      "numero": 2,
-      "descripcion": "Arteria muscular en corte transversal, detalle histológico"
+      "numero": 11,
+      "descripcion": "Vista de mayor aumento de un túbulo seminífero en corte transversal"
     },
     {
-      "numero": 3,
-      "descripcion": "Esófago"
+      "numero": 12,
+      "descripcion": "Espermatogonia A clara"
     },
     {
-      "numero": 4,
-      "descripcion": "Arteria muscular pequeña en corte longitudinal"
+      "numero": 13,
+      "descripcion": "Espermatogonia A oscura"
     },
     {
-      "numero": 5,
-      "descripcion": "Detalle de otra incidencia de corte (corte longitudinal)"
+      "numero": 14,
+      "descripcion": "Espermatogonia B"
     },
     {
-      "numero": 6,
-      "descripcion": "Corte transversal – comparación con otros vasos sanguíneos"
+      "numero": 15,
+      "descripcion": "Espermatocito primario en paquinema"
     },
     {
-      "numero": 7,
-      "descripcion": "Corte oblicuo de una arteria muscular pequeña"
+      "numero": 16,
+      "descripcion": "Espermatocito secundario"
     },
     {
-      "numero": 8,
-      "descripcion": "Corte transversal de una arteria muscular – con láminas elásticas interna y externa"
+      "numero": 17,
+      "descripcion": "Espermatide temprana"
     }
   ],
   "patologias": [],
   "metadata": {
-    "fecha": "2026-05-21 18:06:41",
+    "fecha": "2026-06-12 20:21:27",
     "modelo": "meta-llama/llama-4-scout-17b-16e-instruct",
-    "num_imagenes": 8
+    "num_imagenes": 13
   }
 }

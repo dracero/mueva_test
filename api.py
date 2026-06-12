@@ -42,10 +42,30 @@ async def lifespan(app: FastAPI):
     asistente.inicializar_componentes()
     print("✅ Modelos cargados.")
     
+    # Esperar a que Qdrant esté en línea antes de continuar
+    import asyncio
+    client = asistente.qdrant_client
+    max_retries = 15
+    retry_interval = 2
+    qdrant_online = False
+    print("⏳ Esperando a que Qdrant esté listo...")
+    for i in range(max_retries):
+        try:
+            await client.get_collections()
+            qdrant_online = True
+            print("   ✅ Conexión con Qdrant establecida con éxito.")
+            break
+        except Exception as e:
+            print(f"   ⚠️ Intento {i+1}/{max_retries}: Qdrant no responde ({e}). Reintentando en {retry_interval}s...")
+            await asyncio.sleep(retry_interval)
+    
+    if not qdrant_online:
+        print("❌ ERROR: No se pudo conectar a Qdrant después de varios intentos.")
+        raise ConnectionError("Qdrant no está disponible.")
+    
     # Asegurar que los índices de payload existan en colecciones existentes
     try:
         from qdrant_client.models import PayloadSchemaType
-        client = asistente.qdrant_client
         for col in [asistente.gestor_qdrant.content_mv_collection, asistente.gestor_qdrant.content_fde_collection]:
             try:
                 await client.create_payload_index(collection_name=col, field_name="numero_pagina", field_schema=PayloadSchemaType.INTEGER)

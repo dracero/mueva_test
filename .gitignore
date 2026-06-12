@@ -20,3 +20,7 @@ extracted_images_histologia/
 
 # Uploads and temporary images
 uploads_archived/
+
+# Local Vector Database Storage
+histopatologia_data/qdrant_storage/
+
