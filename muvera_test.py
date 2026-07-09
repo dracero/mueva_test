@@ -21,6 +21,10 @@ VENTAJAS vs versión con ColBERT:
 ✅ Código ~20% más corto
 """
 
+# Cargar variables de entorno PRIMERO
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import re
 import json
@@ -39,9 +43,22 @@ import gzip
 import warnings
 from io import BytesIO
 
-# Cargar variables de entorno
-from dotenv import load_dotenv
-load_dotenv()
+# Configurar credenciales
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_KEY = os.getenv("QDRANT_KEY")
+LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
+
+# Configurar LangSmith ANTES de importar LangChain
+if LANGSMITH_API_KEY:
+    os.environ["LANGCHAIN_TRACING_V2"] = "true"
+    os.environ["LANGCHAIN_API_KEY"] = LANGSMITH_API_KEY
+    os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
+    os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "rag_histopatologia_llama_groq")
+    os.environ["LANGCHAIN_CALLBACKS_BACKGROUND"] = "false"
+    print(f"✅ LangSmith pre-configurado - Proyecto: {os.environ['LANGCHAIN_PROJECT']}")
+else:
+    print("⚠️ LANGSMITH_API_KEY no encontrada - tracing deshabilitado")
 
 # Configurar allocator de CUDA antes de importar PyTorch para evitar fragmentación
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -77,6 +94,9 @@ from colpali_engine.models import ColPaliProcessor
 # LangChain
 from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tracers import LangChainTracer
+from langchain_core.callbacks import CallbackManager
+from langsmith import traceable
 
 # LangGraph
 from langgraph.graph import StateGraph, START, END
@@ -85,12 +105,6 @@ from langgraph.graph.message import add_messages
 
 # Groq para extracción de ontología
 from groq import Groq as GroqClient
-
-# Configuración de credenciales local
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_KEY = os.getenv("QDRANT_KEY")
-LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
 
 nest_asyncio.apply()
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -175,17 +189,102 @@ class Config:
 def setup_langsmith():
     """Configurar LangSmith para telemetría"""
     if not LANGSMITH_API_KEY:
+        print("⚠️ LANGSMITH_API_KEY no encontrada")
         return False
     try:
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
         os.environ["LANGCHAIN_API_KEY"] = LANGSMITH_API_KEY
         os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-        os.environ["LANGCHAIN_PROJECT"] = "rag_histopatologia_llama_groq"
-        print("✅ LangSmith configurado")
+        os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "rag_histopatologia_llama_groq")
+        
+        # Habilitar tracing detallado
+        os.environ["LANGCHAIN_CALLBACKS_BACKGROUND"] = "false"
+        
+        print(f"✅ LangSmith configurado - Proyecto: {os.environ['LANGCHAIN_PROJECT']}")
         return True
-    except:
-        print("⚠️ LangSmith no disponible")
+    except Exception as e:
+        print(f"⚠️ Error configurando LangSmith: {e}")
         return False
+
+def log_to_langsmith(name: str, metadata: dict):
+    """
+    Helper para registrar eventos en LangSmith mediante prints estructurados
+    y agregando metadata al run actual de LangSmith.
+    """
+    try:
+        import json
+        log_entry = {
+            "event": name,
+            "metadata": metadata,
+            "timestamp": time.time()
+        }
+        # LangChain captura estos prints en el contexto de tracing
+        print(f"[LANGSMITH_EVENT] {json.dumps(log_entry)}")
+        
+        # Intentar agregar metadata al run activo de LangSmith
+        try:
+            from langsmith.run_helpers import get_current_run_tree
+            run_tree = get_current_run_tree()
+            if run_tree:
+                if not run_tree.metadata:
+                    run_tree.metadata = {}
+                run_tree.metadata[name] = metadata
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"⚠️ Error logging to LangSmith: {e}")
+
+def clean_message_content(content: Any) -> Any:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        clean_list = []
+        for item in content:
+            if isinstance(item, dict):
+                clean_item = item.copy()
+                if item.get("type") == "image_url" and "image_url" in item:
+                    img_url = item["image_url"].get("url", "")
+                    if isinstance(img_url, str) and img_url.startswith("data:image"):
+                        clean_item["image_url"] = {"url": f"data:image/jpeg;base64,<base64_hidden - size: {len(img_url)} chars>"}
+                clean_list.append(clean_item)
+            else:
+                clean_list.append(item)
+        return clean_list
+    return content
+
+def clean_state_for_logging(state: Any) -> Any:
+    if not isinstance(state, dict):
+        return state
+    clean = state.copy()
+    if "imagen_base64" in clean and clean["imagen_base64"]:
+        clean["imagen_base64"] = f"<base64_hidden - size: {len(clean['imagen_base64'])} chars>"
+    if "messages" in clean and clean["messages"]:
+        clean_messages = []
+        for msg in clean["messages"]:
+            try:
+                msg_copy = msg.__class__(
+                    content=clean_message_content(msg.content),
+                    id=getattr(msg, "id", None),
+                    additional_kwargs=getattr(msg, "additional_kwargs", {}),
+                    response_metadata=getattr(msg, "response_metadata", {})
+                )
+                clean_messages.append(msg_copy)
+            except Exception:
+                clean_messages.append(repr(msg))
+        clean["messages"] = clean_messages
+    return clean
+
+def traceable_node(name: str):
+    def decorator(func):
+        async def wrapper(self, state: Dict, *args, **kwargs):
+            clean_state = clean_state_for_logging(state)
+            @traceable(name=name)
+            async def _run_traced(clean_in: Dict):
+                result = await func(self, state, *args, **kwargs)
+                return clean_state_for_logging(result)
+            return await _run_traced(clean_state)
+        return wrapper
+    return decorator
 
 def cleanup_memory():
     """Liberar memoria GPU/CPU"""
@@ -1348,11 +1447,46 @@ class SistemaRAGColPaliPuro:
 
     # ========== NODOS DEL GRAFO ==========
 
+    @traceable(name="Qdrant RAG Retriever", run_type="retriever")
+    async def _retrieve_qdrant(
+        self,
+        query_text: str,
+        query_multivector: np.ndarray,
+        query_fde: np.ndarray,
+        top_k: int = 5,
+        prefetch_multiplier: int = Config.SEARCH_PREFETCH_MULTIPLIER,
+        min_score: float = 0.0,
+        figuras_filtro: List[str] = None,
+        filtro_tipo: str = None,
+        filtro_paginas: List[int] = None
+    ) -> Tuple[List[Dict], bool]:
+        """
+        Wrapper de búsqueda Qdrant instrumentado para LangSmith.
+        """
+        return await self.gestor_qdrant.buscar_muvera_2stage(
+            query_multivector=query_multivector,
+            query_fde=query_fde,
+            top_k=top_k,
+            prefetch_multiplier=prefetch_multiplier,
+            min_score=min_score,
+            figuras_filtro=figuras_filtro,
+            filtro_tipo=filtro_tipo,
+            filtro_paginas=filtro_paginas
+        )
+
+    @traceable_node(name="Nodo: Recepcionar Consulta")
     async def _nodo_recepcionar_consulta(self, state: AgentState) -> AgentState:
         """Nodo 0: Recepcionar consulta y procesar imagen Base64 si existe"""
         print(f"\n📨 Recibiendo consulta: {state['consulta_usuario'][:50]}...")
         
-        state["trayectoria"] = [{"nodo": "recepcionar_consulta", "timestamp": time.time()}]
+        # Registrar en trayectoria con metadatos para LangSmith
+        trayectoria_entry = {
+            "nodo": "recepcionar_consulta",
+            "timestamp": time.time(),
+            "consulta": state['consulta_usuario'],
+            "tiene_imagen": bool(state.get("imagen_base64") or state.get("imagen_consulta"))
+        }
+        state["trayectoria"] = [trayectoria_entry]
         
         # Procesar imagen Base64 si existe
         if state.get("imagen_base64"):
@@ -1370,15 +1504,18 @@ class SistemaRAGColPaliPuro:
                     f.write(image_data)
                 
                 state["imagen_consulta"] = str(filepath)
+                trayectoria_entry["imagen_guardada"] = str(filepath)
                 print(f"✅ Imagen guardada en: {filepath}")
                 
             except Exception as e:
                 print(f"❌ Error decodificando imagen Base64: {e}")
+                trayectoria_entry["error_imagen"] = str(e)
                 # No fallamos, solo continuamos sin imagen
                 state["imagen_consulta"] = None
         
         return state
 
+    @traceable_node(name="Nodo: Inicializar")
     async def _nodo_inicializar(self, state: AgentState) -> AgentState:
         state["ontologia"] = self.ontologia or {}
         state["tiempo_inicio"] = time.time()
@@ -1389,6 +1526,13 @@ class SistemaRAGColPaliPuro:
             n_results=5
         )
         state["contexto_memoria"] = history
+        
+        trayectoria_entry = {
+            "nodo": "inicializar",
+            "timestamp": time.time(),
+            "memoria_recuperada": len(history) if history else 0
+        }
+        
         if history:
             print(f"   ✅ Memoria recuperada: {len(history)} caracteres")
             
@@ -1419,15 +1563,19 @@ Responde ÚNICAMENTE con la consulta reescrita, sin explicaciones, introduccione
                     if (resolved.startswith('"') and resolved.endswith('"')) or (resolved.startswith("'") and resolved.endswith("'")):
                         resolved = resolved[1:-1].strip()
                     consulta_resuelta = resolved
+                    trayectoria_entry["consulta_original"] = state['consulta_usuario']
+                    trayectoria_entry["consulta_resuelta"] = consulta_resuelta
                     print(f"   🎯 Consulta original: '{state['consulta_usuario']}'")
                     print(f"   🎯 Consulta resuelta:   '{consulta_resuelta}'")
             except Exception as e:
                 print(f"   ⚠️ Error resolviendo referencias: {e}")
+                trayectoria_entry["error_resolucion"] = str(e)
         
         state["consulta_resuelta"] = consulta_resuelta
-        state["trayectoria"].append({"nodo": "inicializar", "timestamp": time.time()})
+        state["trayectoria"].append(trayectoria_entry)
         return state
 
+    @traceable_node(name="Nodo: Analizar Ontología")
     async def _nodo_analizar_ontologia(self, state: AgentState) -> AgentState:
         if not state["ontologia"]:
             state["contexto_ontologico"] = "No disponible"
@@ -1440,6 +1588,7 @@ Responde ÚNICAMENTE con la consulta reescrita, sin explicaciones, introduccione
         state["trayectoria"].append({"nodo": "analizar_ontologia", "timestamp": time.time()})
         return state
 
+    @traceable_node(name="Nodo: Clasificar Consulta")
     async def _nodo_clasificar(self, state: AgentState) -> AgentState:
         # Priority 1: Image upload override
         imagen_upload = (
@@ -1471,9 +1620,25 @@ Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usu
         else:
             state["requiere_imagen"] = detectar_intencion_imagen(state['consulta_usuario'])
 
-        state["trayectoria"].append({"nodo": "clasificar", "timestamp": time.time()})
+        # Registrar clasificación en trayectoria
+        trayectoria_entry = {
+            "nodo": "clasificar",
+            "timestamp": time.time(),
+            "requiere_imagen": state["requiere_imagen"],
+            "clasificacion_llm": response.content[:200]
+        }
+        state["trayectoria"].append(trayectoria_entry)
+        
+        # Log a LangSmith
+        log_to_langsmith("clasificacion_consulta", {
+            "requiere_imagen": state["requiere_imagen"],
+            "tiene_imagen_adjunta": imagen_upload,
+            "clasificacion": response.content[:200]
+        })
+        
         return state
 
+    @traceable_node(name="Nodo: Optimizar Consulta")
     async def _nodo_optimizar_consulta(self, state: AgentState) -> AgentState:
         messages = [
             SystemMessage(content="""Eres un optimizador de consultas para un sistema RAG de histopatología.
@@ -1547,6 +1712,7 @@ Ejemplo:
         similarity = 1.0 - (hamming_distance / len(hash1))
         return float(similarity)
 
+    @traceable_node(name="Nodo: Buscar")
     async def _nodo_buscar(self, state: AgentState) -> AgentState:
         resultados = []
         has_rejected = False
@@ -1574,8 +1740,10 @@ Ejemplo:
                 figuras_en_consulta = self._extraer_figuras_de_texto(state['consulta_optimizada'])
                 t1 = time.time()
 
-                resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
-                    query_mv, query_fde,
+                resultados, has_rejected = await self._retrieve_qdrant(
+                    query_text=state.get('consulta_optimizada', "Búsqueda por imagen"),
+                    query_multivector=query_mv,
+                    query_fde=query_fde,
                     min_score=umbral_busqueda,
                     figuras_filtro=figuras_en_consulta,
                     filtro_tipo="imagen",
@@ -1669,8 +1837,10 @@ Ejemplo:
                 t1 = time.time()
 
                 # Paso 1: Buscar texto semánticamente similar (para contexto del LLM)
-                resultados_texto, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
-                    query_mv, query_fde,
+                resultados_texto, has_rejected = await self._retrieve_qdrant(
+                    query_text=state.get('consulta_optimizada', "Búsqueda por texto de imagen"),
+                    query_multivector=query_mv,
+                    query_fde=query_fde,
                     min_score=0.0,
                     figuras_filtro=figuras_en_consulta,
                     filtro_tipo="texto"
@@ -1870,8 +2040,10 @@ Ejemplo:
                 figuras_en_consulta = self._extraer_figuras_de_texto(state['consulta_optimizada'])
                 t1 = time.time()
 
-                resultados, has_rejected = await self.gestor_qdrant.buscar_muvera_2stage(
-                    query_mv, query_fde,
+                resultados, has_rejected = await self._retrieve_qdrant(
+                    query_text=state.get('consulta_optimizada', "Búsqueda de texto"),
+                    query_multivector=query_mv,
+                    query_fde=query_fde,
                     min_score=0.0,
                     figuras_filtro=figuras_en_consulta,
                 )
@@ -1885,25 +2057,65 @@ Ejemplo:
 
         # ── Logging de resultados ───────────────────────────────────────
         print(f"\n📄 Resultados recuperados ({len(resultados)}):")
+        
+        # Preparar metadatos de resultados para LangSmith
+        resultados_metadata = []
         for i, res in enumerate(resultados):
             payload = res.get('payload', {})
             score = res.get('score', 0.0)
             doc_name = payload.get('nombre_archivo', 'unknown')
             page_num = payload.get('numero_pagina', '?')
+            tipo = payload.get('tipo', 'unknown')
+            
+            metadata_res = {
+                "index": i + 1,
+                "score": score,
+                "document": doc_name,
+                "page": page_num,
+                "tipo": tipo
+            }
+            
             print(f"   [{i+1}] Score: {score:.4f} | Doc: {doc_name} (Pg {page_num})")
-            if payload.get('tipo') == 'texto':
-                print(f"       Texto: {payload.get('texto', '')[:100]}...")
-            elif payload.get('tipo') == 'imagen':
-                print(f"       Imagen: {payload.get('imagen_path', 'N/A')}")
+            if tipo == 'texto':
+                texto_preview = payload.get('texto', '')[:100]
+                metadata_res["texto_preview"] = texto_preview
+                print(f"       Texto: {texto_preview}...")
+            elif tipo == 'imagen':
+                img_path = payload.get('imagen_path', 'N/A')
+                metadata_res["imagen_path"] = img_path
+                print(f"       Imagen: {img_path}")
+            
+            resultados_metadata.append(metadata_res)
+        
+        # Registrar resultados de DB en LangSmith
+        log_to_langsmith("qdrant_search_results", {
+            "num_results": len(resultados),
+            "results": resultados_metadata,
+            "search_type": "path_3_upload" if tiene_imagen_adjunta else ("path_2_imagen_texto" if requiere_imagen else "path_1_texto"),
+            "has_rejected": has_rejected
+        })
 
         # ── Actualizar estado ───────────────────────────────────────────
         state["resultados_busqueda"] = resultados
         state["abortar_reset"] = has_rejected
 
+        # Registrar metadatos de búsqueda en trayectoria para LangSmith
+        trayectoria_entry = {
+            "nodo": "buscar",
+            "timestamp": time.time(),
+            "path": "path_3_upload" if tiene_imagen_adjunta else ("path_2_imagen_texto" if requiere_imagen else "path_1_texto"),
+            "num_resultados": len(resultados),
+            "resultados_metadata": resultados_metadata,
+            "has_rejected": has_rejected,
+            "requiere_imagen": requiere_imagen,
+            "tiene_imagen_adjunta": tiene_imagen_adjunta
+        }
+
         if has_rejected:
             print("🚨 ALERTA: Candidatos rechazados detectados. Se abortará la generación para evitar errores de contexto excesivo.")
             state["contexto_documentos"] = ""
             state["imagenes_relevantes"] = []
+            trayectoria_entry["accion"] = "abort_generation"
         else:
             contextos = []
             imagenes = []
@@ -1937,8 +2149,11 @@ Ejemplo:
             if not state.get("imagenes_relevantes"):
                 state["imagenes_relevantes"] = imagenes[:1]
             # Si Path 2 ya seleccionó una, no agregar más
+            
+            trayectoria_entry["num_contextos"] = len(contextos)
+            trayectoria_entry["num_imagenes"] = len(imagenes)
 
-        state["trayectoria"].append({"nodo": "buscar", "timestamp": time.time()})
+        state["trayectoria"].append(trayectoria_entry)
         return state
 
     def _decidir_camino_tras_busqueda(self, state: AgentState) -> str:
@@ -1947,6 +2162,7 @@ Ejemplo:
             return "reset"
         return "generar"
 
+    @traceable_node(name="Nodo: Reset")
     async def _nodo_reset(self, state: AgentState) -> AgentState:
         """Nodo de reset para detener generación insegura"""
         print("🛑 RESET SYSTEM triggered due to low confidence candidates.")
@@ -2273,6 +2489,7 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
         
         return user_content
 
+    @traceable_node(name="Nodo: Generar Respuesta")
     async def _nodo_generar_respuesta(self, state: AgentState) -> AgentState:
         """Nodo 6: Generar respuesta basada EXCLUSIVAMENTE en contexto recuperado"""
         print("\n💭 Generando respuesta basada en contexto recuperado...")
@@ -2293,7 +2510,9 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
 
         # 2. Validar contexto insuficiente (Requirement 5.1, 5.3)
         contexto = state.get("contexto_documentos", "")
-        if len(contexto.strip()) < 50:
+        tiene_contexto_suficiente = len(contexto.strip()) >= 50
+        
+        if not tiene_contexto_suficiente:
             print("   ⚠️ Contexto insuficiente detectado (<50 caracteres)")
             # El prompt ya guía al LLM a responder apropiadamente con mensaje amigable
 
@@ -2315,10 +2534,32 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
 
         print("   ✅ Respuesta generada")
 
-        state["trayectoria"].append({"nodo": "generar_respuesta", "timestamp": time.time()})
+        # Registrar metadata de generación en trayectoria
+        trayectoria_entry = {
+            "nodo": "generar_respuesta",
+            "timestamp": time.time(),
+            "tipo_consulta": tipo_consulta,
+            "tiene_contexto_suficiente": tiene_contexto_suficiente,
+            "longitud_contexto": len(contexto),
+            "longitud_respuesta": len(response.content),
+            "requiere_imagen": requiere_imagen,
+            "imagenes_encontradas": imagenes_encontradas
+        }
+        state["trayectoria"].append(trayectoria_entry)
+        
+        # Log a LangSmith
+        log_to_langsmith("generacion_respuesta", {
+            "tipo_consulta": tipo_consulta,
+            "tiene_contexto_suficiente": tiene_contexto_suficiente,
+            "longitud_contexto": len(contexto),
+            "longitud_respuesta": len(response.content),
+            "respuesta_preview": response.content[:200]
+        })
+        
         cleanup_memory()
         return state
 
+    @traceable_node(name="Nodo: Finalizar")
     async def _nodo_finalizar(self, state: AgentState) -> AgentState:
         # Guardar la interacción actual en la memoria a largo plazo
         # Limitar la respuesta final para el resumen para evitar saturar el LLM
@@ -2514,6 +2755,25 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
             await self.gestor_qdrant.insertar_batch_muvera(batch_mv, batch_fde)
 
     async def procesar_consulta_estado(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> AgentState:
+        # Limpiar base64 para evitar guardarlo en inputs de LangSmith
+        imagen_base64_preview = f"<base64_hidden - size: {len(imagen_base64)} chars>" if imagen_base64 else None
+        
+        raw_result = []
+
+        @traceable(name="RAG Histopatologia Pipeline", run_type="chain")
+        async def _run_traced(consulta_in: str, imagen_path_in: Optional[str], imagen_base64_in: Optional[str], user_id_in: str):
+            raw_state = await self._procesar_consulta_estado_internal(consulta, imagen_path, imagen_base64, user_id)
+            raw_result.append(raw_state)
+            return clean_state_for_logging(raw_state)
+
+        await _run_traced(consulta, imagen_path, imagen_base64_preview, user_id)
+        return raw_result[0]
+
+    async def _procesar_consulta_estado_internal(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> AgentState:
+        """
+        Procesa una consulta y retorna el estado final del agente.
+        Esta función incluye tracing mejorado para LangSmith.
+        """
         initial_state = AgentState(
             messages=[], consulta_usuario=consulta, consulta_resuelta="", imagen_consulta=imagen_path,
             imagen_base64=imagen_base64,
@@ -2523,8 +2783,86 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
             respuesta_final="", trayectoria=[], user_id=user_id, tiempo_inicio=time.time(),
             abortar_reset=False
         )
-        config = {"configurable": {"thread_id": user_id}}
-        final_state = await self.compiled_graph.ainvoke(initial_state, config=config)
+        
+        # Configuración con metadatos para LangSmith
+        config = {
+            "configurable": {"thread_id": user_id},
+            "metadata": {
+                "user_id": user_id,
+                "consulta": consulta[:100],
+                "tiene_imagen": bool(imagen_path or imagen_base64),
+                "session_type": "rag_histopatologia"
+            },
+            "tags": ["rag", "histopatologia", "multimodal"]
+        }
+        
+        # Registrar inicio de ejecución
+        print(f"\n{'='*80}")
+        print(f"🚀 INICIANDO PROCESAMIENTO - Usuario: {user_id}")
+        print(f"   Consulta: {consulta[:100]}{'...' if len(consulta) > 100 else ''}")
+        print(f"   Imagen adjunta: {'Sí' if imagen_path or imagen_base64 else 'No'}")
+        print(f"{'='*80}\n")
+        
+        # Ejecutar el grafo con callbacks para LangSmith
+        try:
+            final_state = await self.compiled_graph.ainvoke(initial_state, config=config)
+        except Exception as e:
+            print(f"❌ Error ejecutando grafo: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+        
+        # Registrar finalización con resumen de trayectoria
+        tiempo_total = time.time() - final_state.get("tiempo_inicio", time.time())
+        print(f"\n{'='*80}")
+        print(f"✅ PROCESAMIENTO COMPLETADO")
+        print(f"   Tiempo total: {tiempo_total:.2f}s")
+        print(f"   Nodos ejecutados: {len(final_state.get('trayectoria', []))}")
+        
+        # Imprimir resumen de trayectoria para debugging
+        trayectoria = final_state.get('trayectoria', [])
+        if trayectoria:
+            print(f"\n📊 Resumen de trayectoria:")
+            for i, step in enumerate(trayectoria):
+                nodo = step.get('nodo', 'unknown')
+                print(f"   {i+1}. {nodo}")
+                
+                # Imprimir métricas clave de cada nodo
+                if nodo == "buscar":
+                    num_res = step.get('num_resultados', 0)
+                    path = step.get('path', 'unknown')
+                    print(f"      → Path: {path}, Resultados: {num_res}")
+                    
+                    # Imprimir detalles de resultados de DB para verificación
+                    resultados_metadata = step.get('resultados_metadata', [])
+                    if resultados_metadata:
+                        print(f"      → Resultados de Qdrant:")
+                        for res in resultados_metadata[:3]:  # Primeros 3
+                            print(f"         • Score: {res.get('score', 0):.2f}, Doc: {res.get('document', 'N/A')}, Pág: {res.get('page', '?')}")
+                            
+                elif nodo == "inicializar":
+                    memoria = step.get('memoria_recuperada', 0)
+                    print(f"      → Memoria: {memoria} caracteres")
+                elif nodo == "generar_respuesta":
+                    longitud_resp = step.get('longitud_respuesta', 0)
+                    print(f"      → Longitud respuesta: {longitud_resp} caracteres")
+        
+        print(f"{'='*80}\n")
+        
+        # Actualizar metadata en LangSmith para el run actual
+        try:
+            from langsmith.run_helpers import get_current_run_tree
+            run_tree = get_current_run_tree()
+            if run_tree:
+                if not run_tree.metadata:
+                    run_tree.metadata = {}
+                run_tree.metadata["trayectoria"] = trayectoria
+                run_tree.metadata["tiempo_total_segundos"] = tiempo_total
+                run_tree.metadata["requiere_imagen"] = final_state.get("requiere_imagen", False)
+                run_tree.metadata["respuesta_final"] = final_state.get("respuesta_final", "")[:1000]
+        except Exception as e:
+            print(f"⚠️ Error actualizando metadata en LangSmith: {e}")
+            
         return final_state
 
     async def procesar_consulta(self, consulta: str, imagen_path: Optional[str] = None, imagen_base64: Optional[str] = None, user_id: str = "default") -> str:
@@ -2592,9 +2930,10 @@ class AsistenteHistologiaMultimodal(SistemaRAGColPaliPuro):
             return {"pages": []}
 
         query_fde = self.procesador.generar_fde_muvera(query_mv)
-        res, _ = await self.gestor_qdrant.buscar_muvera_2stage(
-            query_mv,
-            query_fde,
+        res, _ = await self._retrieve_qdrant(
+            query_text=query or ("Búsqueda por imagen" if image_path else "Búsqueda vacía"),
+            query_multivector=query_mv,
+            query_fde=query_fde,
             top_k=top_k,
             prefetch_multiplier=prefetch_multiplier,
             filtro_tipo="imagen" if image_path else None
