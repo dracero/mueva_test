@@ -11,7 +11,7 @@ ARQUITECTURA SIMPLIFICADA:
 - MUVERA: Two-stage retrieval (FDE rápido + MV preciso)
 - Qdrant: Base de datos vectorial con soporte multi-vector
 - LangGraph: Orquestación de agentes multi-paso
-- Groq Llama-4 Scout: Generación de respuestas
+- Gemini 2.5 Flash: Generación de respuestas
 
 VENTAJAS vs versión con ColBERT:
 ✅ Más simple (1 modelo en lugar de 2)
@@ -44,7 +44,7 @@ import warnings
 from io import BytesIO
 
 # Configurar credenciales
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# Keys de Google gestionadas por api_key_rotator.py
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_KEY = os.getenv("QDRANT_KEY")
 LANGSMITH_API_KEY = os.getenv("LANGSMITH_API_KEY")
@@ -54,8 +54,8 @@ if LANGSMITH_API_KEY:
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGCHAIN_API_KEY"] = LANGSMITH_API_KEY
     os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-    os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "rag_histopatologia_llama_groq")
-    os.environ["LANGCHAIN_CALLBACKS_BACKGROUND"] = "false"
+    os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "rag_histopatologia_gemini")
+    os.environ["LANGCHAIN_CALLBACKS_BACKGROUND"] = "true"
     print(f"✅ LangSmith pre-configurado - Proyecto: {os.environ['LANGCHAIN_PROJECT']}")
 else:
     print("⚠️ LANGSMITH_API_KEY no encontrada - tracing deshabilitado")
@@ -92,7 +92,7 @@ from colpali_engine.models import ColPali as ColPaliModel
 from colpali_engine.models import ColPaliProcessor
 
 # LangChain
-from langchain_groq import ChatGroq
+from api_key_rotator import create_google_llm, ainvoke_with_retry, invoke_with_retry
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tracers import LangChainTracer
 from langchain_core.callbacks import CallbackManager
@@ -103,8 +103,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.message import add_messages
 
-# Groq para extracción de ontología
-from groq import Groq as GroqClient
+# Gemini para extracción de ontología
 
 nest_asyncio.apply()
 warnings.filterwarnings('ignore', category=FutureWarning)
@@ -195,10 +194,10 @@ def setup_langsmith():
         os.environ["LANGCHAIN_TRACING_V2"] = "true"
         os.environ["LANGCHAIN_API_KEY"] = LANGSMITH_API_KEY
         os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-        os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "rag_histopatologia_llama_groq")
+        os.environ["LANGCHAIN_PROJECT"] = os.getenv("LANGSMITH_PROJECT", "rag_histopatologia_gemini")
         
         # Habilitar tracing detallado
-        os.environ["LANGCHAIN_CALLBACKS_BACKGROUND"] = "false"
+        os.environ["LANGCHAIN_CALLBACKS_BACKGROUND"] = "true"
         
         print(f"✅ LangSmith configurado - Proyecto: {os.environ['LANGCHAIN_PROJECT']}")
         return True
@@ -305,15 +304,12 @@ def cleanup_memory():
 # ============================================================================
 
 class ExtractorOntologia:
-    """Extrae ontología histopatológica usando Groq"""
+    """Extrae ontología histopatológica usando Gemini"""
 
-    def __init__(self, api_key: str):
-        if not api_key:
-            print("⚠️ API Key de Groq no proporcionada para ExtractorOntologia")
-            self.model = None
-            return
-        self._groq_client = GroqClient(api_key=api_key)
-        self.model = "meta-llama/llama-4-scout-17b-16e-instruct"
+    def __init__(self):
+        from api_key_rotator import create_google_llm
+        self.llm = create_google_llm()
+        self.model = "gemini-2.5-flash"
 
     @staticmethod
     def extraer_caption_imagen(page_fitz, img_bbox, texto_pagina_completo: str) -> str:
@@ -367,12 +363,10 @@ Responde SOLAMENTE con un JSON válido, sin texto adicional ni explicaciones."""
             try:
                 prompt_actual = prompt if intento == 0 else \
                     f"Extrae una ontología en formato JSON puro (sin markdown) del siguiente texto de histopatología:\n{contenido[:5000]}"
-                response = self._groq_client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt_actual}],
-                    temperature=0
-                )
-                ontologia_texto = response.choices[0].message.content.strip()
+                from api_key_rotator import invoke_with_retry
+                from langchain_core.messages import HumanMessage
+                response = invoke_with_retry(self.llm, [HumanMessage(content=prompt_actual)])
+                ontologia_texto = response.content.strip()
                 # Limpiar markdown code blocks
                 if '```' in ontologia_texto:
                     # Extraer contenido entre los primeros ``` y los últimos ```
@@ -1366,8 +1360,6 @@ class SistemaRAGColPaliPuro:
 
     def _setup_apis(self):
         """Configurar APIs"""
-        if GROQ_API_KEY:
-            os.environ["GROQ_API_KEY"] = GROQ_API_KEY
         setup_langsmith()
 
     def inicializar_componentes(self):
@@ -1377,11 +1369,8 @@ class SistemaRAGColPaliPuro:
         print("="*80)
 
         # LLM
-        self.llm = ChatGroq(
-            model="meta-llama/llama-4-scout-17b-16e-instruct",
-            temperature=0,
-            api_key=GROQ_API_KEY
-        )
+        from api_key_rotator import create_google_llm
+        self.llm = create_google_llm()
 
         # Configurar directorio de uploads para imágenes temporales
         self.uploads_dir = Path("uploads")
@@ -1401,7 +1390,7 @@ class SistemaRAGColPaliPuro:
         )
 
         # Extractor de ontología
-        self.extractor_ontologia = ExtractorOntologia(GROQ_API_KEY)
+        self.extractor_ontologia = ExtractorOntologia()
         self.ontologia = self.extractor_ontologia.cargar_ontologia()
 
         # LangGraph
@@ -1415,8 +1404,7 @@ class SistemaRAGColPaliPuro:
         graph.add_node("recepcionar_consulta", self._nodo_recepcionar_consulta)
         graph.add_node("inicializar", self._nodo_inicializar)
         graph.add_node("analizar_ontologia", self._nodo_analizar_ontologia)
-        graph.add_node("clasificar", self._nodo_clasificar)
-        graph.add_node("optimizar_consulta", self._nodo_optimizar_consulta)
+        graph.add_node("clasificar_y_optimizar", self._nodo_clasificar_y_optimizar)
         graph.add_node("buscar", self._nodo_buscar)
         graph.add_node("generar_respuesta", self._nodo_generar_respuesta)
         graph.add_node("reset", self._nodo_reset)
@@ -1425,9 +1413,8 @@ class SistemaRAGColPaliPuro:
         graph.add_edge(START, "recepcionar_consulta")
         graph.add_edge("recepcionar_consulta", "inicializar")
         graph.add_edge("inicializar", "analizar_ontologia")
-        graph.add_edge("analizar_ontologia", "clasificar")
-        graph.add_edge("clasificar", "optimizar_consulta")
-        graph.add_edge("optimizar_consulta", "buscar")
+        graph.add_edge("analizar_ontologia", "clasificar_y_optimizar")
+        graph.add_edge("clasificar_y_optimizar", "buscar")
         
         # Condicional después de buscar
         graph.add_conditional_edges(
@@ -1557,7 +1544,8 @@ Responde ÚNICAMENTE con la consulta reescrita, sin explicaciones, introduccione
                     SystemMessage(content="Eres un asistente que reescribe consultas para resolver correferencias basándose en el historial de chat. Tu respuesta debe ser estrictamente la consulta resuelta, nada más."),
                     HumanMessage(content=prompt_resolucion)
                 ]
-                resolucion_response = await self.llm.ainvoke(messages)
+                from api_key_rotator import ainvoke_with_retry
+                resolucion_response = await ainvoke_with_retry(self.llm, messages)
                 resolved = resolucion_response.content.strip()
                 if resolved:
                     if (resolved.startswith('"') and resolved.endswith('"')) or (resolved.startswith("'") and resolved.endswith("'")):
@@ -1588,8 +1576,8 @@ Responde ÚNICAMENTE con la consulta reescrita, sin explicaciones, introduccione
         state["trayectoria"].append({"nodo": "analizar_ontologia", "timestamp": time.time()})
         return state
 
-    @traceable_node(name="Nodo: Clasificar Consulta")
-    async def _nodo_clasificar(self, state: AgentState) -> AgentState:
+    @traceable_node(name="Nodo: Clasificar y Optimizar Consulta")
+    async def _nodo_clasificar_y_optimizar(self, state: AgentState) -> AgentState:
         # Priority 1: Image upload override
         imagen_upload = (
             state.get('imagen_consulta')
@@ -1597,71 +1585,76 @@ Responde ÚNICAMENTE con la consulta reescrita, sin explicaciones, introduccione
         )
 
         info_imagen = f"\nImagen adjunta: Sí" if state.get('imagen_consulta') else "\nImagen adjunta: No"
+        
+        prompt = f"""Eres un experto en histopatología y optimizador de búsquedas RAG.
+Analiza la consulta del usuario y el contexto ontológico provisto para realizar dos tareas:
+
+1. Determinar la intención del usuario respecto a las imágenes.
+   Si el usuario pide EXPLÍCITAMENTE que se le muestre, busque o proporcione una imagen, foto, figura o micrografía (ej: "mostrame una foto", "quiero ver una imagen de..."), REQUIERE_IMAGEN debe ser TRUE.
+   Si hace una pregunta teórica, o usa palabras como "ver" o "imagen" sin estar pidiendo ver una imagen, REQUIERE_IMAGEN debe ser FALSE.
+
+2. Reformular la consulta en términos de búsqueda optimizados para una base de datos vectorial de histopatología.
+   - Responde con términos de búsqueda precisos usando terminología histológica.
+   - Evita palabras vacías como "por favor", "buscar", "imagen", "foto" (enfócate en el tejido/órgano/estructura).
+
+Responde ÚNICAMENTE en el siguiente formato estricto:
+REQUIERE_IMAGEN: [TRUE o FALSE]
+CONSULTA_OPTIMIZADA: [términos de búsqueda aquí]"""
+
         messages = [
-            SystemMessage(content="""Eres un experto en histopatología. Clasifica consultas.
-Debes determinar la intención del usuario. SOLAMENTE si el usuario pide EXPLÍCITAMENTE que se le muestre, busque o proporcione una imagen, foto, figura o micrografía (ej: "mostrame una foto", "quiero ver una imagen de..."), debes indicarlo.
-Si el usuario hace una pregunta teórica, o usa palabras como "ver" o "imagen" sin estar pidiendo explícitamente ver una imagen (ej: "qué se puede ver en la muestra", "qué es una imagen digital"), debes indicarlo como FALSE.
-Termina tu respuesta EXACTAMENTE con la línea "REQUIERE_IMAGEN: TRUE" si el usuario desea que le muestres una imagen, o "REQUIERE_IMAGEN: FALSE" si es solo una pregunta o comentario."""),
+            SystemMessage(content=prompt),
             HumanMessage(content=f"CONSULTA: {state['consulta_usuario']}{info_imagen}\nCONTEXTO ONTOLÓGICO:\n{state['contexto_ontologico']}")
         ]
-        response = await self.llm.ainvoke(messages)
-        state["clasificacion"] = response.content
+        
+        from api_key_rotator import ainvoke_with_retry
+        response = await ainvoke_with_retry(self.llm, messages)
+        response_content = response.content.strip()
+        state["clasificacion"] = response_content
 
-        # Determine requiere_imagen using priority chain:
-        #   Priority 1: Image upload present → True
-        #   Priority 2: LLM says REQUIERE_IMAGEN: TRUE/FALSE → use that
-        #   Priority 3: Fallback to detectar_intencion_imagen(consulta_usuario)
+        # Parsear respuesta
+        requiere_imagen_val = False
+        consulta_optimizada_val = state["consulta_resuelta"] # Fallback
+
+        for line in response_content.split("\n"):
+            line = line.strip()
+            if line.upper().startswith("REQUIERE_IMAGEN:"):
+                val = line.split(":", 1)[1].strip().upper()
+                if "TRUE" in val:
+                    requiere_imagen_val = True
+                elif "FALSE" in val:
+                    requiere_imagen_val = False
+            elif line.upper().startswith("CONSULTA_OPTIMIZADA:"):
+                consulta_optimizada_val = line.split(":", 1)[1].strip()
+
+        # Determinar requiere_imagen final con prioridad
         if imagen_upload:
             state["requiere_imagen"] = True
-        elif "REQUIERE_IMAGEN: TRUE" in response.content.upper():
-            state["requiere_imagen"] = True
-        elif "REQUIERE_IMAGEN: FALSE" in response.content.upper():
-            state["requiere_imagen"] = False
         else:
-            state["requiere_imagen"] = detectar_intencion_imagen(state['consulta_usuario'])
+            state["requiere_imagen"] = requiere_imagen_val
 
-        # Registrar clasificación en trayectoria
+        # Si el parser falló o devolvió vacío, usar fallback
+        if not consulta_optimizada_val:
+            consulta_optimizada_val = state["consulta_resuelta"]
+
+        state["consulta_optimizada"] = consulta_optimizada_val
+        print(f"   🔧 Requiere Imagen: {state['requiere_imagen']} | Consulta optimizada: {state['consulta_optimizada']}")
+
+        # Registrar en trayectoria
         trayectoria_entry = {
-            "nodo": "clasificar",
+            "nodo": "clasificar_y_optimizar",
             "timestamp": time.time(),
             "requiere_imagen": state["requiere_imagen"],
-            "clasificacion_llm": response.content[:200]
+            "consulta_optimizada": state["consulta_optimizada"]
         }
         state["trayectoria"].append(trayectoria_entry)
-        
+
         # Log a LangSmith
-        log_to_langsmith("clasificacion_consulta", {
+        log_to_langsmith("clasificar_y_optimizar", {
             "requiere_imagen": state["requiere_imagen"],
             "tiene_imagen_adjunta": imagen_upload,
-            "clasificacion": response.content[:200]
+            "consulta_optimizada": state["consulta_optimizada"]
         })
-        
-        return state
 
-    @traceable_node(name="Nodo: Optimizar Consulta")
-    async def _nodo_optimizar_consulta(self, state: AgentState) -> AgentState:
-        messages = [
-            SystemMessage(content="""Eres un optimizador de consultas para un sistema RAG de histopatología.
-Tu ÚNICA tarea es reformular la consulta del usuario en términos de búsqueda precisos.
-
-REGLAS ESTRICTAS:
-1. Responde SOLAMENTE con la consulta optimizada, SIN explicaciones ni texto adicional.
-2. Enfócate EXCLUSIVAMENTE en el tema de la consulta actual.
-3. Usa terminología histológica precisa cuando sea apropiado.
-4. NO incluyas frases como "Aquí está la consulta optimizada" o "Sugiero buscar".
-5. La salida debe ser SOLO los términos de búsqueda, nada más.
-6. Si la consulta pide imágenes, enfócate en el TEMA (tejido/órgano/estructura), no en la palabra "imagen".
-
-Ejemplo:
-- Consulta: "mostrame imagenes de arterias" → "arterias histología corte transversal túnica íntima media adventicia"
-- Consulta: "qué es el epitelio estratificado" → "epitelio estratificado clasificación características capas celulares"
-"""),
-            HumanMessage(content=f"CONSULTA: {state['consulta_resuelta']}\nCONTEXTO ONTOLÓGICO: {state['contexto_ontologico'][:500]}")
-        ]
-        response = await self.llm.ainvoke(messages)
-        state["consulta_optimizada"] = response.content.strip()
-        print(f"   🔧 Consulta optimizada: {state['consulta_optimizada'][:200]}")
-        state["trayectoria"].append({"nodo": "optimizar_consulta", "timestamp": time.time()})
         return state
 
     def _calcular_dhash(self, image_path: str, hash_size: int = 16) -> Optional[np.ndarray]:
@@ -2529,7 +2522,8 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
         ]
 
         # 6. Invocar LLM y generar respuesta
-        response = await self.llm.ainvoke(messages)
+        from api_key_rotator import ainvoke_with_retry
+        response = await ainvoke_with_retry(self.llm, messages)
         state["respuesta_final"] = response.content
 
         print("   ✅ Respuesta generada")
@@ -2561,30 +2555,34 @@ Responde basándote ÚNICAMENTE en el contexto de arriba."""
 
     @traceable_node(name="Nodo: Finalizar")
     async def _nodo_finalizar(self, state: AgentState) -> AgentState:
-        # Guardar la interacción actual en la memoria a largo plazo
-        # Limitar la respuesta final para el resumen para evitar saturar el LLM
+        # Guardar la interacción actual en la memoria a largo plazo en segundo plano
         respuesta_final_val = state.get("respuesta_final", "")
         consulta_usuario_val = state.get("consulta_usuario", "")
         respuesta_corta = respuesta_final_val[:2000]
         
-        # Generar un resumen rápido usando el LLM
         if self.memoria is not None and respuesta_final_val and consulta_usuario_val:
-            try:
-                print("   📝 Resumiendo interacción para la memoria...")
-                messages = [
-                    SystemMessage(content="Eres un asistente que resume interacciones. Escribe un resumen MUY BREVE (1-3 oraciones) de lo que preguntó el usuario y lo que respondiste o concluiste."),
-                    HumanMessage(content=f"USUARIO: {consulta_usuario_val}\nASISTENTE: {respuesta_corta}")
-                ]
-                resume_response = await self.llm.ainvoke(messages)
-                summary = resume_response.content
-                
-                self.memoria.add_interaction_summary(
-                    session_id=state["user_id"],
-                    user_query=consulta_usuario_val,
-                    summary=f"Consulta: {consulta_usuario_val} | Resumen: {summary}"
-                )
-            except Exception as e:
-                print(f"   ⚠️ Error generando resumen de interacción: {e}")
+            async def _resumir_y_guardar_en_background():
+                try:
+                    print("   📝 [Background] Resumiendo interacción para la memoria...")
+                    messages = [
+                        SystemMessage(content="Eres un asistente que resume interacciones. Escribe un resumen MUY BREVE (1-3 oraciones) de lo que preguntó el usuario y lo que respondiste o concluiste."),
+                        HumanMessage(content=f"USUARIO: {consulta_usuario_val}\nASISTENTE: {respuesta_corta}")
+                    ]
+                    from api_key_rotator import ainvoke_with_retry
+                    resume_response = await ainvoke_with_retry(self.llm, messages)
+                    summary = resume_response.content
+                    
+                    self.memoria.add_interaction_summary(
+                        session_id=state["user_id"],
+                        user_query=consulta_usuario_val,
+                        summary=f"Consulta: {consulta_usuario_val} | Resumen: {summary}"
+                    )
+                except Exception as e:
+                    print(f"   ⚠️ [Background] Error generando resumen de interacción: {e}")
+
+            import asyncio
+            asyncio.create_task(_resumir_y_guardar_en_background())
+
         state["trayectoria"].append({"nodo": "finalizar", "timestamp": time.time()})
         return state
 

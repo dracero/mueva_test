@@ -224,7 +224,23 @@ async def chat_endpoint(request: ChatRequest):
     elif image_base64:
         print(f"🖼️ Usando imagen Base64 para contexto")
     
-    response_text, imagenes_relevantes, mostrar_imagenes = await chat_handler(last_message, image_path, image_base64)
+    try:
+        response_text, imagenes_relevantes, mostrar_imagenes = await chat_handler(last_message, image_path, image_base64)
+    except Exception as e:
+        error_str = str(e).lower()
+        if any(kw in error_str for kw in ["quota", "resource_exhausted", "429", "rate limit"]):
+            print(f"🚨 Error de cuota en chat_handler: {str(e)[:300]}")
+            return {
+                "response": "⚠️ Se agotó la cuota de la API de Google Gemini en todas las claves disponibles. Por favor, esperá unos minutos e intentá de nuevo.",
+                "imagenes_recuperadas": [],
+                "mostrar_imagenes": False
+            }
+        print(f"🚨 Error inesperado en chat_handler: {e}")
+        return {
+            "response": f"❌ Error procesando la consulta: {str(e)[:500]}",
+            "imagenes_recuperadas": [],
+            "mostrar_imagenes": False
+        }
     
     print(f"📤 Respuesta API: {len(imagenes_relevantes)} imágenes (mostrar={mostrar_imagenes}): {imagenes_relevantes}")
     
