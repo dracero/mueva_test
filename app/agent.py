@@ -90,7 +90,7 @@ from google import genai as GoogleGenAIClient
 
 # API Key Rotator (proyecto raíz)
 import sys as _sys
-_project_root = str(Path(__file__).resolve().parents[0])
+_project_root = str(Path(__file__).resolve().parents[1])
 if _project_root not in _sys.path:
     _sys.path.insert(0, _project_root)
 from api_key_rotator import google_key_rotator, create_google_llm, _is_quota_error  # noqa: E402
@@ -142,7 +142,7 @@ class Config:
     """Configuración del sistema ColPali Puro + MUVERA"""
 
     # Adaptado para ejecución local
-    BASE_DIR = Path(__file__).resolve().parent / "histopatologia_data"
+    BASE_DIR = Path(__file__).resolve().parent.parent / "histopatologia_data"
     EMBEDDINGS_DIR = BASE_DIR / "embeddings"
     ONTOLOGY_DIR = BASE_DIR / "ontologia"
     CACHE_DIR = BASE_DIR / "cache"
@@ -3122,3 +3122,9 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# Compatibility wrapper for FastAPI server
+class HistologyAgent(MedicalAgent):
+    """Compatibility class wrapping MedicalAgent as HistologyAgent"""
+    pass
+

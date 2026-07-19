@@ -7,10 +7,12 @@ import shutil
 async def main():
     asistente = AsistenteHistologiaMultimodal()
     await asistente.inicializar_componentes()
+    project_root = Path(__file__).resolve().parent
     print("Borrando embeddings locales...")
-    if os.path.exists("embeddings"):
-        shutil.rmtree("embeddings")
-    os.makedirs("embeddings", exist_ok=True)
+    embeddings_dir = project_root / "embeddings"
+    if embeddings_dir.exists():
+        shutil.rmtree(embeddings_dir)
+    os.makedirs(embeddings_dir, exist_ok=True)
     
     print("Borrando colecciones de Qdrant...")
     client = asistente.gestor_qdrant.client
@@ -24,11 +26,11 @@ async def main():
         except Exception:
             print(f"No existía: {col}")
             
-    pdf_dir = Path("./pdfs")
+    pdf_dir = project_root / "pdfs"
     if pdf_dir.exists():
         archivos_existentes = list(pdf_dir.glob("*.pdf"))
     else:
-        archivos_existentes = list(Path(".").glob("*.pdf"))
+        archivos_existentes = list(project_root.glob("*.pdf"))
         
     if archivos_existentes:
         await asistente.procesar_y_almacenar_pdfs_multimodal(

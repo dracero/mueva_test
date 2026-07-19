@@ -11,6 +11,7 @@ import shutil
 import warnings
 warnings.filterwarnings("ignore", message=".*is not compatible with the current PyTorch installation.*")
 warnings.filterwarnings("ignore", category=UserWarning, module="torch.cuda")
+warnings.filterwarnings("ignore", message=".*token_type_ids is not provided.*")
 
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,7 +33,8 @@ async def lifespan(app: FastAPI):
     print("🚀 Iniciando backend y cargando modelos...")
     
     # Limpiar directorio de uploads al inicio para evitar "memoria" de imágenes anteriores
-    uploads_dir = Path("uploads")
+    project_root = Path(__file__).resolve().parent
+    uploads_dir = project_root / "uploads"
     if uploads_dir.exists():
         print(f"🧹 Limpiando directorio {uploads_dir}...")
         for file in uploads_dir.glob("*"):
@@ -84,10 +86,6 @@ async def lifespan(app: FastAPI):
         pdfs = list(pdf_dir.glob("*.pdf"))
         if pdfs:
             print(f"📦 Se encontraron {len(pdfs)} PDFs. Verificando si es necesario indexar...")
-            # Aquí podríamos verificar si la colección está vacía, pero por simplicidad
-            # lanzamos el proceso. El método store_in_qdrant verifique si existe,
-            # pero procesar_y_almacenar_pdfs_multimodal procesará todo de nuevo.
-            # Idealmente, deberíamos chequear si la colección está vacía.
             
             # Chequeo rápido de colección vacía
             try:
@@ -111,8 +109,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 # Mount static directory for images
-os.makedirs("histopatologia_data/embeddings", exist_ok=True)
-app.mount("/histopatologia_data", StaticFiles(directory="histopatologia_data"), name="histopatologia_data")
+project_root = Path(__file__).resolve().parent
+os.makedirs(project_root / "histopatologia_data" / "embeddings", exist_ok=True)
+app.mount("/histopatologia_data", StaticFiles(directory=str(project_root / "histopatologia_data")), name="histopatologia_data")
 
 # Configurar CORS para permitir requests del frontend
 app.add_middleware(
@@ -192,11 +191,12 @@ class ChatRequest(BaseModel):
 
 def get_latest_uploaded_image() -> Optional[str]:
     """Obtiene la imagen más reciente subida al servidor."""
-    uploads_dir = "uploads"
-    if not os.path.exists(uploads_dir):
+    project_root = Path(__file__).resolve().parent
+    uploads_dir = project_root / "uploads"
+    if not uploads_dir.exists():
         return None
     
-    image_files = glob.glob(os.path.join(uploads_dir, "*"))
+    image_files = glob.glob(str(uploads_dir / "*"))
     if not image_files:
         return None
     
@@ -247,9 +247,10 @@ async def chat_endpoint(request: ChatRequest):
     # Limpiar cualquier imagen en 'uploads' (ya sea subida vía /upload-image o guardada 
     # desde base64) para que no sea reutilizada accidentalmente en los turnos posteriores.
     try:
-        archive_dir = "uploads_archived"
+        project_root = Path(__file__).resolve().parent
+        archive_dir = project_root / "uploads_archived"
         os.makedirs(archive_dir, exist_ok=True)
-        uploads_dir = "uploads"
+        uploads_dir = project_root / "uploads"
         if os.path.exists(uploads_dir):
             for filename in os.listdir(uploads_dir):
                 file_path = os.path.join(uploads_dir, filename)
@@ -259,9 +260,23 @@ async def chat_endpoint(request: ChatRequest):
     except Exception as e:
         print(f"⚠️ Error archivando imágenes: {e}")
             
+    # Convertir rutas absolutas a rutas relativas para el frontend
+    imagenes_limpias = []
+    for img in (imagenes_relevantes or []):
+        path_str = img.get("path", "")
+        if "histopatologia_data" in path_str:
+            idx = path_str.find("histopatologia_data")
+            rel_path = path_str[idx:]
+        else:
+            rel_path = os.path.basename(path_str)
+        imagenes_limpias.append({
+            "path": rel_path,
+            "descripcion": img.get("descripcion", "")
+        })
+
     return {
         "response": response_text,
-        "imagenes_recuperadas": imagenes_relevantes if mostrar_imagenes else [],
+        "imagenes_recuperadas": imagenes_limpias if mostrar_imagenes else [],
         "mostrar_imagenes": mostrar_imagenes
     }
 
@@ -275,8 +290,10 @@ async def upload_image(file: UploadFile = File(...)):
     """
     try:
         # Guardar archivo localmente
-        file_path = f"uploads/{file.filename}"
-        os.makedirs("uploads", exist_ok=True)
+        project_root = Path(__file__).resolve().parent
+        uploads_dir = project_root / "uploads"
+        os.makedirs(uploads_dir, exist_ok=True)
+        file_path = str(uploads_dir / file.filename)
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
@@ -328,5 +345,6 @@ async def reindex_pdfs():
 
 if __name__ == "__main__":
     # Crear carpeta uploads si no existe
-    os.makedirs("uploads", exist_ok=True)
+    project_root = Path(__file__).resolve().parent
+    os.makedirs(project_root / "uploads", exist_ok=True)
     uvicorn.run(app, host="127.0.0.1", port=8000)

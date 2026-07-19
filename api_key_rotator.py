@@ -137,6 +137,7 @@ def create_google_llm(
         max_output_tokens=max_output_tokens,
         google_api_key=key,
         thinking_budget=0,
+        max_retries=0,
     )
 
 
@@ -161,6 +162,7 @@ def _rebuild_llm(llm, new_key):
         max_output_tokens=getattr(llm, "max_output_tokens", 8192),
         google_api_key=new_key,
         thinking_budget=0,
+        max_retries=0,
     )
 
 
@@ -190,9 +192,8 @@ def invoke_with_retry(llm, messages, *, rotator=None, max_retries=0, base_wait=2
             new_key = rotator.get_key()
             llm = _rebuild_llm(llm, new_key)
             current_key = new_key
-            wait = base_wait * (2 ** attempt)
-            print(f"⏳ Esperando {wait:.1f}s antes de reintentar...")
-            time.sleep(wait)
+            print("⏳ Reintentando inmediatamente...")
+            time.sleep(0.1)
 
     raise last_exc
 
@@ -228,10 +229,8 @@ async def ainvoke_with_retry(llm, messages, *, rotator=None, max_retries=0, base
             new_key = rotator.get_key()
             llm = _rebuild_llm(llm, new_key)
             current_key = new_key
-            # Wait corto con cap de 5s para no bloquear
-            wait = min(base_wait * (1.5 ** attempt), 5.0)
-            print(f"⏳ Esperando {wait:.1f}s antes de reintentar...")
-            await asyncio.sleep(wait)
+            print("⏳ Reintentando inmediatamente...")
+            await asyncio.sleep(0.1)
 
     print(f"🚨 Todas las {max_retries} keys agotadas. Devolviendo error al usuario.")
     raise last_exc
